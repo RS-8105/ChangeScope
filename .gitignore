@@ -1,0 +1,42 @@
+# Operating System
+.DS_Store
+Thumbs.db
+
+# IDE and Editors
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Logs and temporary files
+*.log
+logs/
+*.tmp
+*.bak
+hs_err_pid*
+replay_pid*
+
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+build/
+.npm/
+.eslintcache
+
+# Java / Maven / Gradle
+target/
+*.class
+*.jar
+*.war
+*.ear
+.gradle/
+
+# Environment and Secrets
+.env
+.env.*
+!.env.example
