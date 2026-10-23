@@ -13,9 +13,14 @@ import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.Problem;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.CompactConstructorDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
+import com.github.javaparser.ast.body.EnumConstantDeclaration;
+import com.github.javaparser.ast.body.EnumDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.RecordDeclaration;
+import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.nodeTypes.NodeWithName;
 import com.github.javaparser.ast.type.ClassOrInterfaceType;
 import com.github.javaparser.ast.type.Type;
@@ -63,9 +68,16 @@ public class JavaSourceParserService {
                 .map(imp -> imp.getNameAsString() + (imp.isAsterisk() ? ".*" : ""))
                 .toList();
 
-            List<ParsedType> types = cu.findAll(ClassOrInterfaceDeclaration.class).stream()
-                .map(this::extractType)
-                .toList();
+            List<ParsedType> types = new ArrayList<>();
+            for (TypeDeclaration<?> typeDecl : cu.findAll(TypeDeclaration.class)) {
+                if (typeDecl instanceof ClassOrInterfaceDeclaration cid) {
+                    types.add(extractClassOrInterface(cid));
+                } else if (typeDecl instanceof RecordDeclaration rd) {
+                    types.add(extractRecord(rd));
+                } else if (typeDecl instanceof EnumDeclaration ed) {
+                    types.add(extractEnum(ed));
+                }
+            }
 
             return ParsedJavaFile.success(packageName, imports, types);
         } catch (Exception ex) {
@@ -73,7 +85,7 @@ public class JavaSourceParserService {
         }
     }
 
-    private ParsedType extractType(ClassOrInterfaceDeclaration declaration) {
+    private ParsedType extractClassOrInterface(ClassOrInterfaceDeclaration declaration) {
         String name = declaration.getNameAsString();
         TypeKind kind = declaration.isInterface() ? TypeKind.INTERFACE : TypeKind.CLASS;
 
@@ -97,7 +109,111 @@ public class JavaSourceParserService {
             .map(this::extractMethod)
             .toList();
 
-        return new ParsedType(name, kind, extendedTypes, implementedTypes, fields, methods, constructors);
+        return new ParsedType(
+            name,
+            kind,
+            extendedTypes,
+            implementedTypes,
+            fields,
+            methods,
+            constructors,
+            List.of(),
+            List.of()
+        );
+    }
+
+    private ParsedType extractRecord(RecordDeclaration declaration) {
+        String name = declaration.getNameAsString();
+        TypeKind kind = TypeKind.RECORD;
+
+        List<String> extendedTypes = List.of();
+
+        List<String> implementedTypes = declaration.getImplementedTypes().stream()
+            .flatMap(t -> extractTypeNames(t).stream())
+            .toList();
+
+        List<ParsedField> recordComponents = declaration.getParameters().stream()
+            .map(p -> new ParsedField(
+                p.getTypeAsString(),
+                p.getNameAsString(),
+                extractTypeNames(p.getType())
+            ))
+            .toList();
+
+        List<ParsedField> bodyFields = declaration.getFields().stream()
+            .flatMap(f -> extractFields(f).stream())
+            .toList();
+
+        List<ParsedField> allFields = new ArrayList<>(recordComponents);
+        allFields.addAll(bodyFields);
+
+        List<ParsedConstructor> constructors = new ArrayList<>();
+        declaration.getConstructors().forEach(ctor -> constructors.add(extractConstructor(ctor)));
+        declaration.getCompactConstructors().forEach(ctor -> constructors.add(extractCompactConstructor(ctor)));
+
+        List<ParsedMethod> methods = declaration.getMethods().stream()
+            .map(this::extractMethod)
+            .toList();
+
+        return new ParsedType(
+            name,
+            kind,
+            extendedTypes,
+            implementedTypes,
+            allFields,
+            methods,
+            constructors,
+            recordComponents,
+            List.of()
+        );
+    }
+
+    private ParsedConstructor extractCompactConstructor(CompactConstructorDeclaration constructor) {
+        String name = constructor.getNameAsString();
+        List<String> referencedTypes = constructor.getThrownExceptions().stream()
+            .flatMap(t -> extractTypeNames(t).stream())
+            .toList();
+
+        return new ParsedConstructor(name, List.of(), List.of(), referencedTypes);
+    }
+
+    private ParsedType extractEnum(EnumDeclaration declaration) {
+        String name = declaration.getNameAsString();
+        TypeKind kind = TypeKind.ENUM;
+
+        List<String> extendedTypes = List.of();
+
+        List<String> implementedTypes = declaration.getImplementedTypes().stream()
+            .flatMap(t -> extractTypeNames(t).stream())
+            .toList();
+
+        List<String> enumConstants = declaration.getEntries().stream()
+            .map(EnumConstantDeclaration::getNameAsString)
+            .toList();
+
+        List<ParsedField> fields = declaration.getFields().stream()
+            .flatMap(f -> extractFields(f).stream())
+            .toList();
+
+        List<ParsedConstructor> constructors = declaration.getConstructors().stream()
+            .map(this::extractConstructor)
+            .toList();
+
+        List<ParsedMethod> methods = declaration.getMethods().stream()
+            .map(this::extractMethod)
+            .toList();
+
+        return new ParsedType(
+            name,
+            kind,
+            extendedTypes,
+            implementedTypes,
+            fields,
+            methods,
+            constructors,
+            List.of(),
+            enumConstants
+        );
     }
 
     private List<ParsedField> extractFields(FieldDeclaration fieldDeclaration) {

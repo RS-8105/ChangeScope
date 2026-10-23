@@ -103,10 +103,13 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGenericException(Exception ex) {
+        String message = (ex.getMessage() != null && !ex.getMessage().isBlank())
+            ? com.changescope.service.github.GitHubWebhookDeliveryService.sanitizeFailureSummary(ex.getMessage())
+            : "An unexpected server error occurred";
         ErrorResponse error = new ErrorResponse(
             HttpStatus.INTERNAL_SERVER_ERROR.value(),
             "INTERNAL_SERVER_ERROR",
-            ex.getMessage() != null ? ex.getMessage() : "An unexpected server error occurred"
+            message
         );
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
     }

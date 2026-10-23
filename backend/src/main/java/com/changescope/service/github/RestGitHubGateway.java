@@ -2,6 +2,7 @@ package com.changescope.service.github;
 
 import com.changescope.config.GitHubProperties;
 import com.changescope.dto.FileChangeStatus;
+import com.changescope.dto.GitTreeResult;
 import com.changescope.dto.PullRequestFileChange;
 import com.changescope.dto.PullRequestMetadata;
 import com.changescope.dto.PullRequestState;
@@ -311,6 +312,42 @@ public class RestGitHubGateway implements GitHubGateway {
         return results;
     }
 
+    @Override
+    public GitTreeResult getGitTree(String owner, String repo, String commitSha) {
+        validateRepoCoordinates(owner, repo);
+        if (commitSha == null || commitSha.isBlank()) {
+            throw new IllegalArgumentException("Commit SHA must not be null or blank");
+        }
+        String cleanSha = commitSha.trim();
+        String resourceDesc = "Git tree for " + owner + "/" + repo + " at commit " + cleanSha;
+
+        GitHubTreeWire wire = executeWithExceptionHandling(resourceDesc, () ->
+            restClient.get()
+                .uri(uriBuilder -> uriBuilder
+                    .path("/repos/{owner}/{repo}/git/trees/{sha}")
+                    .queryParam("recursive", 1)
+                    .build(owner, repo, cleanSha))
+                .retrieve()
+                .body(GitHubTreeWire.class)
+        );
+
+        if (wire == null) {
+            throw new GitHubApiException(500, "MALFORMED_RESPONSE", "Received null tree response for " + resourceDesc);
+        }
+
+        List<String> paths = new ArrayList<>();
+        if (wire.tree() != null) {
+            for (GitHubTreeItemWire item : wire.tree()) {
+                if (item != null && "blob".equalsIgnoreCase(item.type()) && item.path() != null && !item.path().isBlank()) {
+                    paths.add(item.path().trim());
+                }
+            }
+        }
+
+        boolean truncated = Boolean.TRUE.equals(wire.truncated());
+        return new GitTreeResult(paths, truncated);
+    }
+
     private String decodeContent(String content, String encoding) {
         if (content == null || content.isBlank()) {
             return "";
@@ -424,5 +461,20 @@ public class RestGitHubGateway implements GitHubGateway {
         String path,
         String content,
         String sha
+    ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record GitHubTreeWire(
+        String sha,
+        List<GitHubTreeItemWire> tree,
+        Boolean truncated
+    ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record GitHubTreeItemWire(
+        String path,
+        String type,
+        String sha,
+        Long size
     ) {}
 }

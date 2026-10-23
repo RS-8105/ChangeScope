@@ -21,7 +21,8 @@ public record ImpactReport(
     List<UnresolvedMethodCall> unresolvedMethodCalls,
     List<TestImpactCandidate> candidateTests,
     int totalCandidateTests,
-    VerificationPlan verificationPlan
+    VerificationPlan verificationPlan,
+    AnalysisCoverage coverage
 ) {
     public ImpactReport {
         changedTypes = changedTypes != null ? List.copyOf(changedTypes) : List.of();
@@ -61,6 +62,7 @@ public record ImpactReport(
             List.of(),
             List.of(),
             0,
+            null,
             null
         );
     }
@@ -90,6 +92,7 @@ public record ImpactReport(
             unresolvedMethodCalls,
             List.of(),
             0,
+            null,
             null
         );
     }
@@ -115,6 +118,7 @@ public record ImpactReport(
             methodDependencies,
             unresolvedMethodCalls,
             candidateTests,
+            null,
             null
         );
     }
@@ -134,6 +138,34 @@ public record ImpactReport(
         this(
             changedTypes,
             affectedTypes,
+            dependencies,
+            parseErrors,
+            changedMethods,
+            affectedMethods,
+            methodDependencies,
+            unresolvedMethodCalls,
+            candidateTests,
+            verificationPlan,
+            null
+        );
+    }
+
+    public ImpactReport(
+        List<String> changedTypes,
+        List<AffectedType> affectedTypes,
+        List<TypeDependency> dependencies,
+        List<FileParseError> parseErrors,
+        List<String> changedMethods,
+        List<AffectedMethod> affectedMethods,
+        List<MethodDependency> methodDependencies,
+        List<UnresolvedMethodCall> unresolvedMethodCalls,
+        List<TestImpactCandidate> candidateTests,
+        VerificationPlan verificationPlan,
+        AnalysisCoverage coverage
+    ) {
+        this(
+            changedTypes,
+            affectedTypes,
             changedTypes != null ? changedTypes.size() : 0,
             affectedTypes != null ? affectedTypes.size() : 0,
             dependencies,
@@ -146,7 +178,29 @@ public record ImpactReport(
             unresolvedMethodCalls,
             candidateTests,
             candidateTests != null ? candidateTests.size() : 0,
-            verificationPlan
+            verificationPlan,
+            coverage
+        );
+    }
+
+    public ImpactReport withCoverage(AnalysisCoverage coverage) {
+        return new ImpactReport(
+            this.changedTypes,
+            this.affectedTypes,
+            this.totalChangedTypes,
+            this.totalAffectedTypes,
+            this.dependencies,
+            this.parseErrors,
+            this.changedMethods,
+            this.affectedMethods,
+            this.totalChangedMethods,
+            this.totalAffectedMethods,
+            this.methodDependencies,
+            this.unresolvedMethodCalls,
+            this.candidateTests,
+            this.totalCandidateTests,
+            this.verificationPlan,
+            coverage
         );
     }
 

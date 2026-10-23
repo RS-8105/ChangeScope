@@ -49,6 +49,11 @@ public class GitHubProperties {
     private Long installationId;
 
     /**
+     * Optional secret used for verifying incoming GitHub webhook payloads (X-Hub-Signature-256).
+     */
+    private String webhookSecret;
+
+    /**
      * Buffer in seconds before actual expiry to trigger token refresh. Defaults to 60 seconds.
      */
     private long tokenExpiryBufferSeconds = 60;
@@ -107,6 +112,18 @@ public class GitHubProperties {
         this.installationId = installationId;
     }
 
+    public String getWebhookSecret() {
+        return webhookSecret;
+    }
+
+    public void setWebhookSecret(String webhookSecret) {
+        this.webhookSecret = (webhookSecret != null && !webhookSecret.isBlank()) ? webhookSecret.trim() : null;
+    }
+
+    public boolean hasWebhookSecret() {
+        return webhookSecret != null && !webhookSecret.isBlank();
+    }
+
     public long getTokenExpiryBufferSeconds() {
         return tokenExpiryBufferSeconds;
     }
@@ -125,7 +142,7 @@ public class GitHubProperties {
 
     @Override
     public String toString() {
-        // Safe string representation ensuring private keys, JWTs, and tokens are NEVER logged
+        // Safe string representation ensuring private keys, JWTs, tokens, and webhook secrets are NEVER logged
         return "GitHubProperties{"
             + "apiBaseUrl='" + apiBaseUrl + '\''
             + ", hasAppConfig=" + hasAppConfig()
@@ -133,6 +150,7 @@ public class GitHubProperties {
             + ", hasPrivateKey=" + hasPrivateKey()
             + ", installationId=" + installationId
             + ", hasToken=" + hasToken()
+            + ", hasWebhookSecret=" + hasWebhookSecret()
             + ", tokenExpiryBufferSeconds=" + tokenExpiryBufferSeconds
             + '}';
     }

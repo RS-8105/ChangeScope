@@ -1,5 +1,6 @@
 package com.changescope.service.github;
 
+import com.changescope.dto.GitTreeResult;
 import com.changescope.dto.PullRequestFileChange;
 import com.changescope.dto.PullRequestMetadata;
 import com.changescope.dto.SourceFileContent;
@@ -53,4 +54,14 @@ public interface GitHubGateway {
      * @return list of source file contents
      */
     List<SourceFileContent> getFilesContent(String owner, String repo, List<String> filePaths, String commitSha);
+
+    /**
+     * Retrieves the repository file tree at a specified commit reference.
+     *
+     * @param owner     the repository owner
+     * @param repo      the repository name
+     * @param commitSha the commit SHA or git reference
+     * @return Git tree result containing file paths and truncation status
+     */
+    GitTreeResult getGitTree(String owner, String repo, String commitSha);
 }

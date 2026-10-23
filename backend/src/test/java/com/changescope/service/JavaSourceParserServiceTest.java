@@ -1,5 +1,7 @@
 package com.changescope.service;
 
+import com.changescope.dto.ParsedConstructor;
+import com.changescope.dto.ParsedField;
 import com.changescope.dto.ParsedJavaFile;
 import com.changescope.dto.ParsedMethod;
 import com.changescope.dto.ParsedType;
@@ -230,5 +232,186 @@ class JavaSourceParserServiceTest {
         ParsedJavaFile blankResult = parserService.parse("   \n\t  ");
         assertThat(blankResult.success()).isFalse();
         assertThat(blankResult.errorMessage()).contains("must not be null or empty");
+    }
+
+    @Test
+    void parse_recordDeclarationWithComponentsAndMethods_extractsComponentsAndMethods() {
+        String source = """
+            package com.changescope.model;
+
+            import java.math.BigDecimal;
+
+            public record OrderItem(String itemId, int quantity, BigDecimal unitPrice) {
+
+                public OrderItem {
+                    if (quantity <= 0) {
+                        throw new IllegalArgumentException("Quantity must be positive");
+                    }
+                }
+
+                public BigDecimal calculateSubtotal() {
+                    return unitPrice.multiply(BigDecimal.valueOf(quantity));
+                }
+            }
+            """;
+
+        ParsedJavaFile result = parserService.parse(source);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.packageName()).isEqualTo("com.changescope.model");
+        assertThat(result.imports()).containsExactly("java.math.BigDecimal");
+        assertThat(result.types()).hasSize(1);
+
+        ParsedType type = result.types().get(0);
+        assertThat(type.name()).isEqualTo("OrderItem");
+        assertThat(type.kind()).isEqualTo(TypeKind.RECORD);
+        assertThat(type.isRecord()).isTrue();
+        assertThat(type.isClass()).isFalse();
+        assertThat(type.isInterface()).isFalse();
+        assertThat(type.isEnum()).isFalse();
+        assertThat(type.extendedTypes()).isEmpty();
+
+        // Verify record components
+        assertThat(type.recordComponents()).hasSize(3);
+        assertThat(type.recordComponents().get(0).name()).isEqualTo("itemId");
+        assertThat(type.recordComponents().get(0).type()).isEqualTo("String");
+        assertThat(type.recordComponents().get(1).name()).isEqualTo("quantity");
+        assertThat(type.recordComponents().get(1).type()).isEqualTo("int");
+        assertThat(type.recordComponents().get(2).name()).isEqualTo("unitPrice");
+        assertThat(type.recordComponents().get(2).type()).isEqualTo("BigDecimal");
+        assertThat(type.recordComponents().get(2).referencedTypeNames()).contains("BigDecimal");
+
+        // Verify all fields contains the components
+        assertThat(type.fields()).hasSize(3);
+        assertThat(type.fields()).containsExactlyElementsOf(type.recordComponents());
+
+        // Verify methods
+        assertThat(type.methods()).hasSize(1);
+        ParsedMethod method = type.methods().get(0);
+        assertThat(method.name()).isEqualTo("calculateSubtotal");
+        assertThat(method.returnType()).isEqualTo("BigDecimal");
+        assertThat(method.returnTypeReferencedTypes()).contains("BigDecimal");
+
+        // Verify compact constructor
+        assertThat(type.constructors()).hasSize(1);
+        ParsedConstructor ctor = type.constructors().get(0);
+        assertThat(ctor.name()).isEqualTo("OrderItem");
+    }
+
+    @Test
+    void parse_enumDeclarationWithConstantsFieldsAndMethods_extractsAll() {
+        String source = """
+            package com.changescope.model;
+
+            public enum PaymentStatus {
+                PENDING(1, "Pending"),
+                AUTHORIZED(2, "Authorized"),
+                FAILED(3, "Failed");
+
+                private final int code;
+                private final String label;
+
+                PaymentStatus(int code, String label) {
+                    this.code = code;
+                    this.label = label;
+                }
+
+                public int getCode() {
+                    return code;
+                }
+
+                public boolean isTerminal() {
+                    return this == FAILED;
+                }
+            }
+            """;
+
+        ParsedJavaFile result = parserService.parse(source);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.packageName()).isEqualTo("com.changescope.model");
+        assertThat(result.types()).hasSize(1);
+
+        ParsedType type = result.types().get(0);
+        assertThat(type.name()).isEqualTo("PaymentStatus");
+        assertThat(type.kind()).isEqualTo(TypeKind.ENUM);
+        assertThat(type.isEnum()).isTrue();
+        assertThat(type.isRecord()).isFalse();
+        assertThat(type.isClass()).isFalse();
+        assertThat(type.isInterface()).isFalse();
+        assertThat(type.extendedTypes()).isEmpty();
+
+        // Verify enum constants
+        assertThat(type.enumConstants()).containsExactly("PENDING", "AUTHORIZED", "FAILED");
+
+        // Verify fields
+        assertThat(type.fields()).hasSize(2);
+        assertThat(type.fields().get(0).name()).isEqualTo("code");
+        assertThat(type.fields().get(0).type()).isEqualTo("int");
+        assertThat(type.fields().get(1).name()).isEqualTo("label");
+        assertThat(type.fields().get(1).type()).isEqualTo("String");
+
+        // Verify constructors
+        assertThat(type.constructors()).hasSize(1);
+        ParsedConstructor ctor = type.constructors().get(0);
+        assertThat(ctor.name()).isEqualTo("PaymentStatus");
+        assertThat(ctor.parameterTypes()).containsExactly("int", "String");
+
+        // Verify methods
+        assertThat(type.methods()).hasSize(2);
+        assertThat(type.methods()).extracting(ParsedMethod::name).containsExactly("getCode", "isTerminal");
+    }
+
+    @Test
+    void parse_recordImplementingInterfaces_extractsImplementedTypes() {
+        String source = """
+            package com.changescope.event;
+
+            import java.io.Serializable;
+            import com.changescope.audit.Auditable;
+
+            public record AuditEvent(String eventId, long timestamp) implements Serializable, Auditable {}
+            """;
+
+        ParsedJavaFile result = parserService.parse(source);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.types()).hasSize(1);
+
+        ParsedType type = result.types().get(0);
+        assertThat(type.name()).isEqualTo("AuditEvent");
+        assertThat(type.kind()).isEqualTo(TypeKind.RECORD);
+        assertThat(type.implementedTypes()).containsExactly("Serializable", "Auditable");
+    }
+
+    @Test
+    void parse_multipleTypesInSameFile_extractsClassesRecordsAndEnumsInSourceOrder() {
+        String source = """
+            package com.changescope.domain;
+
+            public class UserAccount {
+                private AccountStatus status;
+            }
+
+            record UserDetails(String username, String email) {}
+
+            enum AccountStatus {
+                ACTIVE, SUSPENDED
+            }
+            """;
+
+        ParsedJavaFile result = parserService.parse(source);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.types()).hasSize(3);
+
+        assertThat(result.types().get(0).name()).isEqualTo("UserAccount");
+        assertThat(result.types().get(0).kind()).isEqualTo(TypeKind.CLASS);
+
+        assertThat(result.types().get(1).name()).isEqualTo("UserDetails");
+        assertThat(result.types().get(1).kind()).isEqualTo(TypeKind.RECORD);
+
+        assertThat(result.types().get(2).name()).isEqualTo("AccountStatus");
+        assertThat(result.types().get(2).kind()).isEqualTo(TypeKind.ENUM);
     }
 }

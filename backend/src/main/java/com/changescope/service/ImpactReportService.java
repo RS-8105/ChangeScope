@@ -1,5 +1,6 @@
 package com.changescope.service;
 
+import com.changescope.dto.AnalysisCoverage;
 import com.changescope.dto.BlastRadiusResult;
 import com.changescope.dto.DependencyAnalysisResult;
 import com.changescope.dto.FileParseError;
@@ -8,6 +9,7 @@ import com.changescope.dto.JavaSourceFileInput;
 import com.changescope.dto.MethodAnalysisResult;
 import com.changescope.dto.TestImpactResult;
 import com.changescope.dto.VerificationPlan;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -47,6 +49,7 @@ public class ImpactReportService {
         this(dependencyAnalysisService, blastRadiusAnalysisService, javaMethodAnalysisService, testImpactAnalysisService, new VerificationPlanService());
     }
 
+    @Autowired
     public ImpactReportService(
         JavaDependencyAnalysisService dependencyAnalysisService,
         BlastRadiusAnalysisService blastRadiusAnalysisService,
@@ -62,6 +65,14 @@ public class ImpactReportService {
     }
 
     public ImpactReport generateReport(List<JavaSourceFileInput> files, List<String> changedTypes) {
+        return generateReport(files, changedTypes, (AnalysisCoverage) null);
+    }
+
+    public ImpactReport generateReport(
+        List<JavaSourceFileInput> files,
+        List<String> changedTypes,
+        AnalysisCoverage coverage
+    ) {
         DependencyAnalysisResult dependencyResult = dependencyAnalysisService.analyze(files);
         BlastRadiusResult blastRadiusResult = blastRadiusAnalysisService.analyze(dependencyResult, changedTypes);
         MethodAnalysisResult methodResult = javaMethodAnalysisService.analyze(files, changedTypes);
@@ -83,7 +94,8 @@ public class ImpactReportService {
             methodResult.affectedMethods(),
             methodResult.methodDependencies(),
             methodResult.unresolvedCalls(),
-            testImpactResult.candidateTests()
+            testImpactResult.candidateTests(),
+            coverage
         );
 
         return new ImpactReport(
@@ -96,7 +108,8 @@ public class ImpactReportService {
             methodResult.methodDependencies(),
             methodResult.unresolvedCalls(),
             testImpactResult.candidateTests(),
-            verificationPlan
+            verificationPlan,
+            coverage
         );
     }
 

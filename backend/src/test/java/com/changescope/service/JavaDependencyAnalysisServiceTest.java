@@ -331,4 +331,105 @@ class JavaDependencyAnalysisServiceTest {
         // Because SharedItem is present in both pkgA and pkgB wildcard imports, resolution is ambiguous and must not invent a relationship
         assertThat(result.dependencies()).isEmpty();
     }
+
+    @Test
+    void analyze_referencesToRecordAndEnum_resolvesDependenciesWithoutAmbiguity() {
+        String eventInterfaceSource = """
+            package com.changescope.event;
+
+            public interface DomainEvent {}
+            """;
+
+        String enumSource = """
+            package com.changescope.model;
+
+            public enum PaymentStatus {
+                PENDING, AUTHORIZED, FAILED
+            }
+            """;
+
+        String recordSource = """
+            package com.changescope.model;
+
+            import com.changescope.event.DomainEvent;
+
+            public record PaymentTransaction(String transactionId, PaymentStatus status) implements DomainEvent {}
+            """;
+
+        String consumerSource = """
+            package com.changescope.service;
+
+            import com.changescope.model.PaymentStatus;
+            import com.changescope.model.PaymentTransaction;
+
+            public class PaymentService {
+                private PaymentTransaction lastTransaction;
+
+                public PaymentStatus verifyPayment(PaymentTransaction tx) {
+                    return tx.status();
+                }
+            }
+            """;
+
+        List<JavaSourceFileInput> files = List.of(
+            new JavaSourceFileInput("src/main/java/com/changescope/event/DomainEvent.java", eventInterfaceSource),
+            new JavaSourceFileInput("src/main/java/com/changescope/model/PaymentStatus.java", enumSource),
+            new JavaSourceFileInput("src/main/java/com/changescope/model/PaymentTransaction.java", recordSource),
+            new JavaSourceFileInput("src/main/java/com/changescope/service/PaymentService.java", consumerSource)
+        );
+
+        DependencyAnalysisResult result = dependencyService.analyze(files);
+
+        assertThat(result.errors()).isEmpty();
+
+        // 1. Record implements interface
+        assertThat(result.dependencies()).contains(
+            new TypeDependency(
+                "com.changescope.model.PaymentTransaction",
+                "com.changescope.event.DomainEvent",
+                RelationshipKind.IMPLEMENTS,
+                "src/main/java/com/changescope/model/PaymentTransaction.java"
+            )
+        );
+
+        // 2. Record component references enum (FIELD relationship)
+        assertThat(result.dependencies()).contains(
+            new TypeDependency(
+                "com.changescope.model.PaymentTransaction",
+                "com.changescope.model.PaymentStatus",
+                RelationshipKind.FIELD,
+                "src/main/java/com/changescope/model/PaymentTransaction.java"
+            )
+        );
+
+        // 3. Class references record via field
+        assertThat(result.dependencies()).contains(
+            new TypeDependency(
+                "com.changescope.service.PaymentService",
+                "com.changescope.model.PaymentTransaction",
+                RelationshipKind.FIELD,
+                "src/main/java/com/changescope/service/PaymentService.java"
+            )
+        );
+
+        // 4. Class references enum via method return
+        assertThat(result.dependencies()).contains(
+            new TypeDependency(
+                "com.changescope.service.PaymentService",
+                "com.changescope.model.PaymentStatus",
+                RelationshipKind.METHOD_RETURN,
+                "src/main/java/com/changescope/service/PaymentService.java"
+            )
+        );
+
+        // 5. Class references record via method parameter
+        assertThat(result.dependencies()).contains(
+            new TypeDependency(
+                "com.changescope.service.PaymentService",
+                "com.changescope.model.PaymentTransaction",
+                RelationshipKind.METHOD_PARAMETER,
+                "src/main/java/com/changescope/service/PaymentService.java"
+            )
+        );
+    }
 }

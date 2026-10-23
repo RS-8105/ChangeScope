@@ -2,6 +2,7 @@ package com.changescope.service.github;
 
 import com.changescope.config.GitHubProperties;
 import com.changescope.dto.FileChangeStatus;
+import com.changescope.dto.GitTreeResult;
 import com.changescope.dto.PullRequestFileChange;
 import com.changescope.dto.PullRequestMetadata;
 import com.changescope.dto.PullRequestState;
@@ -316,5 +317,81 @@ class RestGitHubGatewayTest {
         assertThatThrownBy(() -> gateway.getPullRequest("octocat", "Hello-World", 1))
             .isInstanceOf(GitHubApiException.class)
             .hasMessageContaining("Failed to parse or process GitHub response");
+    }
+
+    @Test
+    void getGitTree_successfulResponse_returnsBlobPathsAndTruncatedFalse() {
+        RestGitHubGateway gateway = new RestGitHubGateway(properties, restClientBuilder);
+
+        String json = """
+            {
+              "sha": "base1234",
+              "truncated": false,
+              "tree": [
+                { "path": "src/main/OrderService.java", "type": "blob", "sha": "b1" },
+                { "path": "src/main", "type": "tree", "sha": "t1" },
+                { "path": "src/test/OrderServiceTest.java", "type": "blob", "sha": "b2" },
+                { "path": "README.md", "type": "blob", "sha": "b3" }
+              ]
+            }
+            """;
+
+        mockServer.expect(requestTo("https://api.github.com/repos/octocat/Hello-World/git/trees/base1234?recursive=1"))
+            .andRespond(withSuccess(json, MediaType.APPLICATION_JSON));
+
+        GitTreeResult result = gateway.getGitTree("octocat", "Hello-World", "base1234");
+
+        mockServer.verify();
+        assertThat(result.truncated()).isFalse();
+        assertThat(result.filePaths()).containsExactly(
+            "src/main/OrderService.java",
+            "src/test/OrderServiceTest.java",
+            "README.md"
+        );
+    }
+
+    @Test
+    void getGitTree_truncatedResponse_setsTruncatedTrue() {
+        RestGitHubGateway gateway = new RestGitHubGateway(properties, restClientBuilder);
+
+        String json = """
+            {
+              "sha": "base1234",
+              "truncated": true,
+              "tree": [
+                { "path": "src/test/OrderServiceTest.java", "type": "blob", "sha": "b1" }
+              ]
+            }
+            """;
+
+        mockServer.expect(requestTo("https://api.github.com/repos/octocat/Hello-World/git/trees/base1234?recursive=1"))
+            .andRespond(withSuccess(json, MediaType.APPLICATION_JSON));
+
+        GitTreeResult result = gateway.getGitTree("octocat", "Hello-World", "base1234");
+
+        mockServer.verify();
+        assertThat(result.truncated()).isTrue();
+        assertThat(result.filePaths()).containsExactly("src/test/OrderServiceTest.java");
+    }
+
+    @Test
+    void getGitTree_blankCommitSha_throwsIllegalArgumentException() {
+        RestGitHubGateway gateway = new RestGitHubGateway(properties, restClientBuilder);
+
+        assertThatThrownBy(() -> gateway.getGitTree("octocat", "Hello-World", "   "))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("Commit SHA must not be null or blank");
+    }
+
+    @Test
+    void getGitTree_errorHandling_throwsGitHubApiException() {
+        RestGitHubGateway gateway = new RestGitHubGateway(properties, restClientBuilder);
+
+        mockServer.expect(requestTo("https://api.github.com/repos/octocat/Hello-World/git/trees/badsha?recursive=1"))
+            .andRespond(withStatus(HttpStatus.NOT_FOUND));
+
+        assertThatThrownBy(() -> gateway.getGitTree("octocat", "Hello-World", "badsha"))
+            .isInstanceOf(GitHubResourceNotFoundException.class)
+            .hasMessageContaining("Resource not found on GitHub (HTTP 404)");
     }
 }

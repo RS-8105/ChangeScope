@@ -23,7 +23,8 @@ import java.util.Objects;
 @Table(
     name = "pull_request_analyses",
     indexes = {
-        @Index(name = "idx_pr_analyses_repo_started_id", columnList = "repository_id, started_at DESC, id DESC")
+        @Index(name = "idx_pr_analyses_repo_started_id", columnList = "repository_id, started_at DESC, id DESC"),
+        @Index(name = "idx_pr_analyses_status_started_at", columnList = "status, started_at")
     }
 )
 public class PullRequestAnalysisEntity {

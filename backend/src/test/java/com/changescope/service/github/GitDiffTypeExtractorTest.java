@@ -279,4 +279,66 @@ class GitDiffTypeExtractorTest {
             "com.changescope.nest.Outer"
         );
     }
+
+    @Test
+    void changedRecordAndEnumDeclarations_identifiesRecordAndEnumTypes() {
+        String source = """
+            package com.changescope.model;
+
+            public record CustomerRecord(String id, String name) {
+                public String displayName() {
+                    return name;
+                }
+            }
+
+            enum CustomerTier {
+                REGULAR,
+                VIP
+            }
+            """;
+
+        // Modify line 5 (inside displayName in CustomerRecord)
+        String patchRecord = """
+            @@ -4,3 +4,4 @@ public record CustomerRecord(String id, String name) {
+                 public String displayName() {
+            +        logAccess();
+                     return name;
+            """;
+
+        // Modify line 11 (inside CustomerTier)
+        String patchEnum = """
+            @@ -10,3 +10,4 @@ enum CustomerTier {
+                 REGULAR,
+            +    PREMIUM,
+                 VIP
+            """;
+
+        PullRequestFileChange changeRecord = new PullRequestFileChange(
+            "CustomerRecord.java",
+            FileChangeStatus.MODIFIED,
+            1,
+            0,
+            patchRecord
+        );
+
+        PullRequestFileChange changeEnum = new PullRequestFileChange(
+            "CustomerRecord.java",
+            FileChangeStatus.MODIFIED,
+            1,
+            0,
+            patchEnum
+        );
+
+        GitDiffExtractionResult resultRecord = extractor.extractChangedTypes(
+            List.of(changeRecord),
+            Map.of("CustomerRecord.java", source)
+        );
+        assertThat(resultRecord.changedTypes()).containsExactly("com.changescope.model.CustomerRecord");
+
+        GitDiffExtractionResult resultEnum = extractor.extractChangedTypes(
+            List.of(changeEnum),
+            Map.of("CustomerRecord.java", source)
+        );
+        assertThat(resultEnum.changedTypes()).containsExactly("com.changescope.model.CustomerTier");
+    }
 }

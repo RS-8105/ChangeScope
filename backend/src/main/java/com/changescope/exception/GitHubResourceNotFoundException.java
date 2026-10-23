@@ -5,4 +5,8 @@ public class GitHubResourceNotFoundException extends GitHubApiException {
     public GitHubResourceNotFoundException(String message) {
         super(404, "NOT_FOUND", message);
     }
+
+    public GitHubResourceNotFoundException(String message, Throwable cause) {
+        super(404, "NOT_FOUND", message, cause);
+    }
 }

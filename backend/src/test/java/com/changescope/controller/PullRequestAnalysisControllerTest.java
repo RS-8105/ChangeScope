@@ -1,7 +1,9 @@
 package com.changescope.controller;
 
+import com.changescope.dto.AnalysisCoverage;
 import com.changescope.dto.AnalysisSummaryResponse;
 import com.changescope.dto.ChangedTypeDetection;
+import com.changescope.dto.CoverageScope;
 import com.changescope.dto.ImpactReport;
 import com.changescope.dto.PullRequestImpactResult;
 import com.changescope.dto.PullRequestMetadata;
@@ -19,6 +21,7 @@ import com.changescope.model.PullRequestAnalysisEntity;
 import com.changescope.service.PullRequestAnalysisService;
 import com.changescope.service.RepositoryService;
 import com.changescope.service.github.PullRequestImpactService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -54,6 +57,9 @@ class PullRequestAnalysisControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private ObjectMapper objectMapper;
+
     @MockBean
     private RepositoryService repositoryService;
 
@@ -84,11 +90,25 @@ class PullRequestAnalysisControllerTest {
             "changescope-org", "order-service", 42, "Refactor payment service",
             "base123", "head456", PullRequestState.OPEN
         );
+        AnalysisCoverage coverage = AnalysisCoverage.boundedPartial(
+            "base123",
+            12,
+            8,
+            false,
+            List.of("Targeted discovery is bounded to candidate naming and package heuristics; full repository indexing was not performed")
+        );
         ImpactReport impactReport = new ImpactReport(
             List.of("com.changescope.service.PaymentService"),
             List.of(),
             List.of(),
-            List.of()
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            null,
+            coverage
         );
         ChangedTypeDetection detection = new ChangedTypeDetection(
             "com.changescope.service.PaymentService",
@@ -125,6 +145,16 @@ class PullRequestAnalysisControllerTest {
             .andExpect(jsonPath("$.pullRequest.state").value("OPEN"))
             .andExpect(jsonPath("$.impactReport.totalChangedTypes").value(1))
             .andExpect(jsonPath("$.impactReport.changedTypes[0]").value("com.changescope.service.PaymentService"))
+            .andExpect(jsonPath("$.impactReport.coverage.scope").value("PARTIAL_INDEX_BOUNDED"))
+            .andExpect(jsonPath("$.impactReport.coverage.baseCommitSha").value("base123"))
+            .andExpect(jsonPath("$.impactReport.coverage.productionFilesDiscovered").value(12))
+            .andExpect(jsonPath("$.impactReport.coverage.productionFilesIncluded").value(8))
+            .andExpect(jsonPath("$.impactReport.coverage.isTruncatedOrCapped").value(false))
+            .andExpect(jsonPath("$.impactReport.coverage.isComplete").value(false))
+            .andExpect(jsonPath("$.impactReport.coverage.incompleteReasons", hasSize(1)))
+            .andExpect(jsonPath("$.impactReport.coverage.incompleteReasons[0]").value(
+                "Targeted discovery is bounded to candidate naming and package heuristics; full repository indexing was not performed"
+            ))
             .andExpect(jsonPath("$.changedTypeDetections", hasSize(1)))
             .andExpect(jsonPath("$.changedTypeDetections[0].fullyQualifiedName").value("com.changescope.service.PaymentService"))
             .andExpect(jsonPath("$.changedTypeDetections[0].evidence").value("PATCH_LINE_MATCH"))
@@ -296,13 +326,27 @@ class PullRequestAnalysisControllerTest {
             "changescope-org", "order-service", 42, "Refactor payment service",
             "base123", "head456", PullRequestState.OPEN
         );
+        AnalysisCoverage coverage = AnalysisCoverage.boundedPartial(
+            "base123",
+            12,
+            8,
+            false,
+            List.of("Targeted discovery is bounded to candidate naming and package heuristics; full repository indexing was not performed")
+        );
         ImpactReport impactReport = new ImpactReport(
             List.of("com.changescope.service.PaymentService"),
             List.of(),
             List.of(),
-            List.of()
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            null,
+            coverage
         );
-        PullRequestImpactResult snapshot = new PullRequestImpactResult(
+        PullRequestImpactResult originalSnapshot = new PullRequestImpactResult(
             10L,
             prMetadata,
             impactReport,
@@ -310,7 +354,11 @@ class PullRequestAnalysisControllerTest {
             List.of()
         );
 
-        when(pullRequestAnalysisService.getAnalysisSnapshot(1L, 10L)).thenReturn(snapshot);
+        // Prove coverage survives JSON snapshot serialization and deserialization
+        String storedSnapshotJson = objectMapper.writeValueAsString(originalSnapshot);
+        PullRequestImpactResult deserializedSnapshot = objectMapper.readValue(storedSnapshotJson, PullRequestImpactResult.class);
+
+        when(pullRequestAnalysisService.getAnalysisSnapshot(1L, 10L)).thenReturn(deserializedSnapshot);
 
         mockMvc.perform(get("/api/v1/repositories/1/analyses/10"))
             .andExpect(status().isOk())
@@ -318,6 +366,16 @@ class PullRequestAnalysisControllerTest {
             .andExpect(jsonPath("$.pullRequest.number").value(42))
             .andExpect(jsonPath("$.pullRequest.title").value("Refactor payment service"))
             .andExpect(jsonPath("$.impactReport.totalChangedTypes").value(1))
+            .andExpect(jsonPath("$.impactReport.coverage.scope").value("PARTIAL_INDEX_BOUNDED"))
+            .andExpect(jsonPath("$.impactReport.coverage.baseCommitSha").value("base123"))
+            .andExpect(jsonPath("$.impactReport.coverage.productionFilesDiscovered").value(12))
+            .andExpect(jsonPath("$.impactReport.coverage.productionFilesIncluded").value(8))
+            .andExpect(jsonPath("$.impactReport.coverage.isTruncatedOrCapped").value(false))
+            .andExpect(jsonPath("$.impactReport.coverage.isComplete").value(false))
+            .andExpect(jsonPath("$.impactReport.coverage.incompleteReasons", hasSize(1)))
+            .andExpect(jsonPath("$.impactReport.coverage.incompleteReasons[0]").value(
+                "Targeted discovery is bounded to candidate naming and package heuristics; full repository indexing was not performed"
+            ))
             .andExpect(jsonPath("$.extractionWarnings[0]").value("warning-1"));
 
         verify(pullRequestAnalysisService).getAnalysisSnapshot(1L, 10L);

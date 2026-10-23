@@ -11,6 +11,8 @@ import com.changescope.dto.TypeDependency;
 import com.changescope.dto.UnresolvedMethodCall;
 import com.changescope.dto.VerificationPlan;
 import com.changescope.dto.VerificationPriority;
+import com.changescope.dto.AnalysisCoverage;
+import com.changescope.dto.CoverageScope;
 import com.changescope.dto.VerificationRecommendation;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -246,5 +248,142 @@ class VerificationPlanServiceTest {
                 && r.priority() == VerificationPriority.MEDIUM
                 && r.target().equals("com.changescope.order.OrderController")
         );
+    }
+
+    @Test
+    void cleanPrFilesOnlyCoverage_doesNotReduceConfidence() {
+        ImpactReport report = new ImpactReport(
+            List.of("com.changescope.order.OrderService"),
+            List.of(new AffectedType("com.changescope.order.OrderController", 1)),
+            List.of(),
+            List.of(),
+            List.of("com.changescope.order.OrderService#checkout(): void"),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(new TestImpactCandidate(
+                "OrderServiceTest.java",
+                "com.changescope.order.OrderServiceTest",
+                "testCheckout",
+                TestMatchEvidence.METHOD_INVOCATION,
+                "Direct invocation",
+                "com.changescope.order.OrderService#checkout(): void"
+            )),
+            null,
+            AnalysisCoverage.prFilesOnly("base-sha-123")
+        );
+
+        VerificationPlan plan = service.generatePlan(report);
+
+        assertThat(plan.confidence().level()).isEqualTo(ConfidenceLevel.HIGH);
+        assertThat(plan.confidence().score()).isEqualTo(100);
+        assertThat(plan.confidence().negativeFactors()).isEmpty();
+        assertThat(plan.confidence().positiveFactors())
+            .anyMatch(s -> s.contains("Analysis completed within pull request file changeset scope"));
+    }
+
+    @Test
+    void boundedPartialCoverage_reducesConfidenceAndAddsNegativeFactor() {
+        ImpactReport report = new ImpactReport(
+            List.of("com.changescope.order.OrderService"),
+            List.of(new AffectedType("com.changescope.order.OrderController", 1)),
+            List.of(),
+            List.of(),
+            List.of("com.changescope.order.OrderService#checkout(): void"),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(new TestImpactCandidate(
+                "OrderServiceTest.java",
+                "com.changescope.order.OrderServiceTest",
+                "testCheckout",
+                TestMatchEvidence.METHOD_INVOCATION,
+                "Direct invocation",
+                "com.changescope.order.OrderService#checkout(): void"
+            )),
+            null,
+            AnalysisCoverage.boundedPartial(
+                "base-sha-123",
+                5,
+                5,
+                false,
+                List.of("Bounded candidate discovery was performed")
+            )
+        );
+
+        VerificationPlan plan = service.generatePlan(report);
+
+        assertThat(plan.confidence().score()).isEqualTo(90);
+        assertThat(plan.confidence().negativeFactors())
+            .anyMatch(s -> s.contains("bounded to targeted candidate discovery") && s.contains("unchanged production dependents may be missing"));
+    }
+
+    @Test
+    void truncatedOrCappedCoverage_reducesConfidenceWithCappedNegativeFactor() {
+        ImpactReport report = new ImpactReport(
+            List.of("com.changescope.order.OrderService"),
+            List.of(new AffectedType("com.changescope.order.OrderController", 1)),
+            List.of(),
+            List.of(),
+            List.of("com.changescope.order.OrderService#checkout(): void"),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(new TestImpactCandidate(
+                "OrderServiceTest.java",
+                "com.changescope.order.OrderServiceTest",
+                "testCheckout",
+                TestMatchEvidence.METHOD_INVOCATION,
+                "Direct invocation",
+                "com.changescope.order.OrderService#checkout(): void"
+            )),
+            null,
+            AnalysisCoverage.boundedPartial(
+                "base-sha-123",
+                25,
+                20,
+                true,
+                List.of("Targeted production file discovery reached limit of 20 files")
+            )
+        );
+
+        VerificationPlan plan = service.generatePlan(report);
+
+        assertThat(plan.confidence().score()).isEqualTo(85);
+        assertThat(plan.confidence().negativeFactors())
+            .anyMatch(s -> s.contains("truncated or capped at discovery limits") && s.contains("unchanged production dependents may be missing"));
+    }
+
+    @Test
+    void failedDiscoveryCoverage_reducesConfidenceAndAddsFailureFactor() {
+        ImpactReport report = new ImpactReport(
+            List.of("com.changescope.order.OrderService"),
+            List.of(new AffectedType("com.changescope.order.OrderController", 1)),
+            List.of(),
+            List.of(),
+            List.of("com.changescope.order.OrderService#checkout(): void"),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(new TestImpactCandidate(
+                "OrderServiceTest.java",
+                "com.changescope.order.OrderServiceTest",
+                "testCheckout",
+                TestMatchEvidence.METHOD_INVOCATION,
+                "Direct invocation",
+                "com.changescope.order.OrderService#checkout(): void"
+            )),
+            null,
+            AnalysisCoverage.prFilesOnlyIncomplete(
+                "base-sha-123",
+                "Failed to retrieve base repository tree for unchanged discovery: timeout"
+            )
+        );
+
+        VerificationPlan plan = service.generatePlan(report);
+
+        assertThat(plan.confidence().score()).isEqualTo(85);
+        assertThat(plan.confidence().negativeFactors())
+            .anyMatch(s -> s.contains("Repository tree discovery failed") && s.contains("restricted to PR files only"));
     }
 }

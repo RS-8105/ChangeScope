@@ -32,12 +32,14 @@ import com.changescope.repository.RepositoryEntityRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.changescope.config.AnalysisProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -47,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DataJpaTest
-@Import({PullRequestAnalysisService.class, ObjectMapper.class})
+@Import({PullRequestAnalysisService.class, ObjectMapper.class, AnalysisProperties.class})
 class PullRequestAnalysisPersistenceTest {
 
     @Autowired
@@ -137,7 +139,7 @@ class PullRequestAnalysisPersistenceTest {
         entityManager.flush();
         entityManager.clear();
 
-        RuntimeException sensitiveError = new RuntimeException("Auth failed: Bearer secret_access_token_12345 and token ghp_ABC1234567890XYZ");
+        RuntimeException sensitiveError = new RuntimeException("Auth failed: Bearer secret_access_token_12345 and token ghp_ABC1234567890XYZ and ghs_16C7e42F292c6912E7710c838347Ae178B4a with secret=my_secret_token");
         service.failAnalysis(analysisId, sensitiveError, Instant.now());
 
         entityManager.flush();
@@ -146,6 +148,8 @@ class PullRequestAnalysisPersistenceTest {
         PullRequestAnalysisEntity failed = analysisRepository.findById(analysisId).orElseThrow();
         assertThat(failed.getFailureSummary()).doesNotContain("secret_access_token_12345");
         assertThat(failed.getFailureSummary()).doesNotContain("ghp_ABC1234567890XYZ");
+        assertThat(failed.getFailureSummary()).doesNotContain("16C7e42F292c6912E7710c838347Ae178B4a");
+        assertThat(failed.getFailureSummary()).doesNotContain("my_secret_token");
         assertThat(failed.getFailureSummary()).contains("***");
     }
 
@@ -321,6 +325,215 @@ class PullRequestAnalysisPersistenceTest {
         assertThatThrownBy(() -> service.getAnalysisSnapshot(repo1.getId(), 8888L))
             .isInstanceOf(ResourceNotFoundException.class)
             .hasMessageContaining("Analysis not found with id: 8888");
+    }
+
+    @Test
+    void reconcileStaleAnalyses_staleRunningBecomesFailedWithCompletionAndSummary() {
+        Instant startTime = Instant.now().minus(45, ChronoUnit.MINUTES);
+        PullRequestAnalysisEntity stale = createAndSaveAnalysisWithStatus(
+            repo1, 101, AnalysisStatus.RUNNING, startTime, null, null, null
+        );
+        entityManager.flush();
+        entityManager.clear();
+
+        Instant reconcileTime = Instant.now();
+        int reconciledCount = service.reconcileStaleAnalyses(Duration.ofMinutes(30), reconcileTime);
+
+        assertThat(reconciledCount).isEqualTo(1);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        PullRequestAnalysisEntity updated = analysisRepository.findById(stale.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(AnalysisStatus.FAILED);
+        assertThat(updated.getCompletedAt()).isNotNull();
+        assertThat(updated.getCompletedAt().toEpochMilli()).isEqualTo(reconcileTime.toEpochMilli());
+        assertThat(updated.getFailureSummary()).isEqualTo(PullRequestAnalysisService.DEFAULT_STALE_FAILURE_SUMMARY);
+        assertThat(updated.getStartedAt().toEpochMilli()).isEqualTo(startTime.toEpochMilli());
+    }
+
+    @Test
+    void reconcileStaleAnalyses_recentRunningRemainsUnchanged() {
+        Instant recentStartTime = Instant.now().minus(10, ChronoUnit.MINUTES);
+        PullRequestAnalysisEntity recent = createAndSaveAnalysisWithStatus(
+            repo1, 102, AnalysisStatus.RUNNING, recentStartTime, null, null, null
+        );
+        entityManager.flush();
+        entityManager.clear();
+
+        int reconciledCount = service.reconcileStaleAnalyses(Duration.ofMinutes(30));
+
+        assertThat(reconciledCount).isEqualTo(0);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        PullRequestAnalysisEntity unchanged = analysisRepository.findById(recent.getId()).orElseThrow();
+        assertThat(unchanged.getStatus()).isEqualTo(AnalysisStatus.RUNNING);
+        assertThat(unchanged.getCompletedAt()).isNull();
+        assertThat(unchanged.getFailureSummary()).isNull();
+    }
+
+    @Test
+    void reconcileStaleAnalyses_completedAndFailedRemainUnchanged() {
+        Instant oldTime = Instant.now().minus(60, ChronoUnit.MINUTES);
+        PullRequestAnalysisEntity completed = createAndSaveAnalysisWithStatus(
+            repo1, 103, AnalysisStatus.COMPLETED, oldTime, oldTime.plusSeconds(30), null, "{\"mock\":\"report\"}"
+        );
+        PullRequestAnalysisEntity failed = createAndSaveAnalysisWithStatus(
+            repo1, 104, AnalysisStatus.FAILED, oldTime, oldTime.plusSeconds(10), "Explicit failure reason", null
+        );
+        entityManager.flush();
+        entityManager.clear();
+
+        int reconciledCount = service.reconcileStaleAnalyses(Duration.ofMinutes(30));
+
+        assertThat(reconciledCount).isEqualTo(0);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        PullRequestAnalysisEntity completedCheck = analysisRepository.findById(completed.getId()).orElseThrow();
+        assertThat(completedCheck.getStatus()).isEqualTo(AnalysisStatus.COMPLETED);
+        assertThat(completedCheck.getReportSnapshot()).isEqualTo("{\"mock\":\"report\"}");
+        assertThat(completedCheck.getFailureSummary()).isNull();
+
+        PullRequestAnalysisEntity failedCheck = analysisRepository.findById(failed.getId()).orElseThrow();
+        assertThat(failedCheck.getStatus()).isEqualTo(AnalysisStatus.FAILED);
+        assertThat(failedCheck.getFailureSummary()).isEqualTo("Explicit failure reason");
+    }
+
+    @Test
+    void reconcileStaleAnalyses_isIdempotent() {
+        Instant oldTime = Instant.now().minus(50, ChronoUnit.MINUTES);
+        PullRequestAnalysisEntity stale = createAndSaveAnalysisWithStatus(
+            repo1, 105, AnalysisStatus.RUNNING, oldTime, null, null, null
+        );
+        entityManager.flush();
+        entityManager.clear();
+
+        // First execution reconciles 1 stale record
+        int firstRun = service.reconcileStaleAnalyses(Duration.ofMinutes(30));
+        assertThat(firstRun).isEqualTo(1);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        // Subsequent runs on the same dataset safely reconcile 0 records
+        int secondRun = service.reconcileStaleAnalyses(Duration.ofMinutes(30));
+        assertThat(secondRun).isEqualTo(0);
+
+        int thirdRun = service.reconcileStaleAnalyses(Duration.ofMinutes(30));
+        assertThat(thirdRun).isEqualTo(0);
+
+        PullRequestAnalysisEntity finalCheck = analysisRepository.findById(stale.getId()).orElseThrow();
+        assertThat(finalCheck.getStatus()).isEqualTo(AnalysisStatus.FAILED);
+        assertThat(finalCheck.getFailureSummary()).isEqualTo(PullRequestAnalysisService.DEFAULT_STALE_FAILURE_SUMMARY);
+    }
+
+    @Test
+    void reconcileStaleAnalyses_rejectsInvalidTimeout() {
+        assertThatThrownBy(() -> service.reconcileStaleAnalyses(Duration.ZERO))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("positive");
+
+        assertThatThrownBy(() -> service.reconcileStaleAnalyses(Duration.ofMinutes(-5)))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("positive");
+
+        assertThatThrownBy(() -> service.reconcileStaleAnalyses(null))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("positive");
+    }
+
+    @Test
+    void reconcileStaleAnalyses_usesConfiguredDefaultProperty() {
+        Instant oldTime = Instant.now().minus(40, ChronoUnit.MINUTES);
+        Instant recentTime = Instant.now().minus(5, ChronoUnit.MINUTES);
+
+        PullRequestAnalysisEntity stale = createAndSaveAnalysisWithStatus(
+            repo1, 106, AnalysisStatus.RUNNING, oldTime, null, null, null
+        );
+        PullRequestAnalysisEntity recent = createAndSaveAnalysisWithStatus(
+            repo1, 107, AnalysisStatus.RUNNING, recentTime, null, null, null
+        );
+        entityManager.flush();
+        entityManager.clear();
+
+        // Uses default 30-minute property from AnalysisProperties
+        int reconciledCount = service.reconcileStaleAnalyses();
+        assertThat(reconciledCount).isEqualTo(1);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(analysisRepository.findById(stale.getId()).orElseThrow().getStatus()).isEqualTo(AnalysisStatus.FAILED);
+        assertThat(analysisRepository.findById(recent.getId()).orElseThrow().getStatus()).isEqualTo(AnalysisStatus.RUNNING);
+    }
+
+    @Test
+    void analysisProperties_validatesPositiveTimeout() {
+        AnalysisProperties properties = new AnalysisProperties();
+        assertThat(properties.getStaleTimeout()).isEqualTo(Duration.ofMinutes(30));
+
+        properties.setStaleTimeout(Duration.ofMinutes(15));
+        assertThat(properties.getStaleTimeout()).isEqualTo(Duration.ofMinutes(15));
+
+        assertThatThrownBy(() -> properties.setStaleTimeout(Duration.ZERO))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("positive");
+
+        assertThatThrownBy(() -> properties.setStaleTimeout(Duration.ofSeconds(-30)))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("positive");
+
+        assertThatThrownBy(() -> properties.setStaleTimeout(null))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("positive");
+    }
+
+    @Test
+    void repository_findByStatusAndStartedAtBefore_findsMatchingStaleRecords() {
+        Instant cutoff = Instant.now().minus(30, ChronoUnit.MINUTES);
+        PullRequestAnalysisEntity stale = createAndSaveAnalysisWithStatus(
+            repo1, 108, AnalysisStatus.RUNNING, cutoff.minusSeconds(60), null, null, null
+        );
+        createAndSaveAnalysisWithStatus(
+            repo1, 109, AnalysisStatus.RUNNING, cutoff.plusSeconds(60), null, null, null
+        );
+        createAndSaveAnalysisWithStatus(
+            repo1, 110, AnalysisStatus.COMPLETED, cutoff.minusSeconds(60), cutoff.minusSeconds(30), null, "{}"
+        );
+        entityManager.flush();
+        entityManager.clear();
+
+        List<PullRequestAnalysisEntity> staleList = analysisRepository.findByStatusAndStartedAtBefore(
+            AnalysisStatus.RUNNING, cutoff
+        );
+        assertThat(staleList).extracting(PullRequestAnalysisEntity::getId).containsExactly(stale.getId());
+    }
+
+    private PullRequestAnalysisEntity createAndSaveAnalysisWithStatus(
+        RepositoryEntity repo,
+        int prNumber,
+        AnalysisStatus status,
+        Instant startedAt,
+        Instant completedAt,
+        String failureSummary,
+        String reportSnapshot
+    ) {
+        PullRequestAnalysisEntity entity = new PullRequestAnalysisEntity(
+            repo,
+            prNumber,
+            "head_sha_" + prNumber,
+            "base_sha_" + prNumber,
+            status,
+            failureSummary,
+            startedAt,
+            completedAt,
+            reportSnapshot
+        );
+        return analysisRepository.save(entity);
     }
 
     private void createAndSaveAnalysisWithTimestamp(RepositoryEntity repo, int prNumber, String headSha, Instant startedAt) {

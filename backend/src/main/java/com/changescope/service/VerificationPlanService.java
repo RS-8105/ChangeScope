@@ -3,7 +3,9 @@ package com.changescope.service;
 import com.changescope.dto.AffectedMethod;
 import com.changescope.dto.AffectedType;
 import com.changescope.dto.AnalysisConfidence;
+import com.changescope.dto.AnalysisCoverage;
 import com.changescope.dto.ConfidenceLevel;
+import com.changescope.dto.CoverageScope;
 import com.changescope.dto.FileParseError;
 import com.changescope.dto.ImpactReport;
 import com.changescope.dto.MethodDependency;
@@ -31,7 +33,7 @@ public class VerificationPlanService {
             return generatePlan(
                 List.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), List.of(), List.of(),
-                List.of()
+                List.of(), null
             );
         }
 
@@ -44,7 +46,8 @@ public class VerificationPlanService {
             report.affectedMethods(),
             report.methodDependencies(),
             report.unresolvedMethodCalls(),
-            report.candidateTests()
+            report.candidateTests(),
+            report.coverage()
         );
     }
 
@@ -59,6 +62,32 @@ public class VerificationPlanService {
         List<UnresolvedMethodCall> unresolvedMethodCalls,
         List<TestImpactCandidate> candidateTests
     ) {
+        return generatePlan(
+            changedTypes,
+            affectedTypes,
+            dependencies,
+            parseErrors,
+            changedMethods,
+            affectedMethods,
+            methodDependencies,
+            unresolvedMethodCalls,
+            candidateTests,
+            null
+        );
+    }
+
+    public VerificationPlan generatePlan(
+        List<String> changedTypes,
+        List<AffectedType> affectedTypes,
+        List<TypeDependency> dependencies,
+        List<FileParseError> parseErrors,
+        List<String> changedMethods,
+        List<AffectedMethod> affectedMethods,
+        List<MethodDependency> methodDependencies,
+        List<UnresolvedMethodCall> unresolvedMethodCalls,
+        List<TestImpactCandidate> candidateTests,
+        AnalysisCoverage coverage
+    ) {
         List<String> safeChangedTypes = changedTypes != null ? changedTypes : List.of();
         List<AffectedType> safeAffectedTypes = affectedTypes != null ? affectedTypes : List.of();
         List<FileParseError> safeParseErrors = parseErrors != null ? parseErrors : List.of();
@@ -72,7 +101,8 @@ public class VerificationPlanService {
             safeAffectedTypes,
             safeParseErrors,
             safeUnresolvedCalls,
-            safeCandidateTests
+            safeCandidateTests,
+            coverage
         );
 
         // 2. Build Recommendations
@@ -196,13 +226,14 @@ public class VerificationPlanService {
         List<AffectedType> affectedTypes,
         List<FileParseError> parseErrors,
         List<UnresolvedMethodCall> unresolvedCalls,
-        List<TestImpactCandidate> candidateTests
+        List<TestImpactCandidate> candidateTests,
+        AnalysisCoverage coverage
     ) {
         int score = 100;
         List<String> positiveFactors = new ArrayList<>();
         List<String> negativeFactors = new ArrayList<>();
 
-        if (changedTypes.isEmpty() && parseErrors.isEmpty() && unresolvedCalls.isEmpty()) {
+        if (changedTypes.isEmpty() && parseErrors.isEmpty() && unresolvedCalls.isEmpty() && (coverage == null || coverage.isComplete())) {
             positiveFactors.add("No changed types or files submitted; baseline analysis state.");
             return new AnalysisConfidence(ConfidenceLevel.HIGH, 100, "HIGH_CONFIDENCE", positiveFactors, negativeFactors);
         }
@@ -254,6 +285,32 @@ public class VerificationPlanService {
         } else if (!changedTypes.isEmpty() && candidateTests.isEmpty()) {
             score -= 10;
             negativeFactors.add("No candidate tests were identified for the changed production components.");
+        }
+
+        // 5. Repository coverage factor
+        if (coverage != null) {
+            if (coverage.scope() == CoverageScope.PARTIAL_INDEX_BOUNDED) {
+                if (coverage.isTruncatedOrCapped()) {
+                    score -= 15;
+                    negativeFactors.add(
+                        "Repository analysis coverage was truncated or capped at discovery limits; unchanged production dependents may be missing."
+                    );
+                } else if (!coverage.isComplete()) {
+                    score -= 10;
+                    negativeFactors.add(
+                        "Repository analysis coverage is bounded to targeted candidate discovery; unchanged production dependents may be missing."
+                    );
+                }
+            } else if (coverage.scope() == CoverageScope.PR_FILES_ONLY) {
+                if (!coverage.isComplete()) {
+                    score -= 15;
+                    negativeFactors.add(
+                        "Repository tree discovery failed; analysis is restricted to PR files only and unchanged repository dependents may be missing."
+                    );
+                } else {
+                    positiveFactors.add("Analysis completed within pull request file changeset scope.");
+                }
+            }
         }
 
         int finalScore = Math.max(0, Math.min(100, score));

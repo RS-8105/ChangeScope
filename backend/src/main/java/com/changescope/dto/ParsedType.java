@@ -9,7 +9,9 @@ public record ParsedType(
     List<String> implementedTypes,
     List<ParsedField> fields,
     List<ParsedMethod> methods,
-    List<ParsedConstructor> constructors
+    List<ParsedConstructor> constructors,
+    List<ParsedField> recordComponents,
+    List<String> enumConstants
 ) {
     public ParsedType {
         extendedTypes = extendedTypes != null ? List.copyOf(extendedTypes) : List.of();
@@ -17,10 +19,24 @@ public record ParsedType(
         fields = fields != null ? List.copyOf(fields) : List.of();
         methods = methods != null ? List.copyOf(methods) : List.of();
         constructors = constructors != null ? List.copyOf(constructors) : List.of();
+        recordComponents = recordComponents != null ? List.copyOf(recordComponents) : List.of();
+        enumConstants = enumConstants != null ? List.copyOf(enumConstants) : List.of();
+    }
+
+    public ParsedType(
+        String name,
+        TypeKind kind,
+        List<String> extendedTypes,
+        List<String> implementedTypes,
+        List<ParsedField> fields,
+        List<ParsedMethod> methods,
+        List<ParsedConstructor> constructors
+    ) {
+        this(name, kind, extendedTypes, implementedTypes, fields, methods, constructors, List.of(), List.of());
     }
 
     public ParsedType(String name, TypeKind kind, List<ParsedMethod> methods) {
-        this(name, kind, List.of(), List.of(), List.of(), methods, List.of());
+        this(name, kind, List.of(), List.of(), List.of(), methods, List.of(), List.of(), List.of());
     }
 
     public boolean isInterface() {
@@ -29,5 +45,13 @@ public record ParsedType(
 
     public boolean isClass() {
         return kind == TypeKind.CLASS;
+    }
+
+    public boolean isRecord() {
+        return kind == TypeKind.RECORD;
+    }
+
+    public boolean isEnum() {
+        return kind == TypeKind.ENUM;
     }
 }
