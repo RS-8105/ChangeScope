@@ -124,8 +124,22 @@ The following table summarizes all configuration properties recognized by `backe
 | `GITHUB_PRIVATE_KEY_PATH` | `github.private-key-path` | *(empty)* | Optional | File path to GitHub App RSA private key PEM file. |
 | `GITHUB_INSTALLATION_ID` | `github.installation-id` | *(empty)* | Optional | Default/fallback GitHub App installation ID. *(Repositories registered in ChangeScope specify their own installation ID; this is only a fallback).* |
 | `GITHUB_WEBHOOK_SECRET` | `github.webhook-secret` | *(empty)* | Optional | Secret key used to verify incoming GitHub webhook HMAC-SHA256 signatures (`X-Hub-Signature-256`). |
+| `INDEXING_EXECUTOR_CORE_POOL_SIZE` | `indexing.executor.core-pool-size` | `2` | Optional | Core thread pool size for asynchronous repository indexing tasks. |
+| `INDEXING_EXECUTOR_MAX_POOL_SIZE` | `indexing.executor.max-pool-size` | `4` | Optional | Maximum thread pool size for asynchronous repository indexing tasks. |
+| `INDEXING_EXECUTOR_QUEUE_CAPACITY` | `indexing.executor.queue-capacity` | `50` | Optional | Bounded queue capacity for pending indexing tasks before task rejection. |
+| `INDEXING_EXECUTOR_THREAD_NAME_PREFIX` | `indexing.executor.thread-name-prefix` | `indexing-` | Optional | Thread name prefix for indexing worker threads. |
+| `INDEXING_EXECUTOR_AWAIT_TERMINATION_SECONDS` | `indexing.executor.await-termination-seconds` | `30` | Optional | Seconds to await completion of running indexing tasks during graceful shutdown. |
+| `INDEXING_EXECUTOR_WAIT_FOR_TASKS_TO_COMPLETE_ON_SHUTDOWN` | `indexing.executor.wait-for-tasks-to-complete-on-shutdown` | `true` | Optional | Whether the indexing executor waits for active tasks to complete on shutdown. |
+| `INDEXING_RETRY_MAX_ATTEMPTS` | `indexing.retry.max-attempts` | `3` | Optional | Maximum retry attempts for transient repository indexing failures. |
+| `INDEXING_RETRY_INITIAL_DELAY` | `indexing.retry.initial-delay` | `10s` | Optional | Initial backoff delay for the first indexing retry attempt. |
+| `INDEXING_RETRY_MULTIPLIER` | `indexing.retry.multiplier` | `2.0` | Optional | Multiplier for exponential backoff between indexing retries. |
+| `INDEXING_RETRY_MAX_DELAY` | `indexing.retry.max-delay` | `15m` | Optional | Maximum cap on delayed retry backoff duration. |
+| `INDEXING_RETRY_JITTER_FACTOR` | `indexing.retry.jitter-factor` | `0.2` | Optional | Jitter factor (+/- 20%) applied to avoid thundering herd retries. |
+| `INDEXING_RETRY_CHECK_INTERVAL` | `indexing.retry.check-interval` | `PT30S` | Optional | Polling interval for background reconciliation and dispatch of due retries. |
+| `INDEXING_RETRY_BATCH_SIZE` | `indexing.retry.batch-size` | `10` | Optional | Maximum batch of due retries claimed and dispatched per cycle. |
 
 *\* Note: GitHub credentials are NOT required to start the application. You only need database credentials for basic local operation and static analysis.*
+
 
 ---
 

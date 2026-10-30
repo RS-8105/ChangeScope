@@ -20,8 +20,17 @@ import com.changescope.dto.TestImpactCandidate;
 import com.changescope.dto.TestMatchEvidence;
 import com.changescope.dto.VerificationPriority;
 import com.changescope.dto.VerificationRecommendation;
+import com.changescope.dto.BaseGraphSnapshot;
+import com.changescope.dto.IndexedTypeDto;
+import com.changescope.dto.RelationshipKind;
+import com.changescope.dto.TypeDependency;
+import com.changescope.dto.TypeKind;
+import com.changescope.model.RepositoryIndexStatus;
 import com.changescope.service.BlastRadiusAnalysisService;
+import com.changescope.service.GraphOverlayService;
 import com.changescope.service.ImpactReportService;
+import com.changescope.service.RepositoryIndexLoadResult;
+import com.changescope.service.RepositoryIndexLoader;
 import com.changescope.service.JavaDependencyAnalysisService;
 import com.changescope.service.JavaMethodAnalysisService;
 import com.changescope.service.JavaSourceParserService;
@@ -1597,5 +1606,282 @@ class PullRequestImpactServiceTest {
         assertThat(coverage.scope()).isEqualTo(CoverageScope.PR_FILES_ONLY);
         assertThat(coverage.isComplete()).isTrue();
         assertThat(coverage.incompleteReasons()).isEmpty();
+    }
+
+    @Test
+    void analyze_withCompletedExactBaseIndex_usesGraphOverlayAndFullCoverage() {
+        RepositoryIndexLoader mockLoader = mock(RepositoryIndexLoader.class);
+        JavaSourceParserService parser = new JavaSourceParserService();
+        JavaDependencyAnalysisService depService = new JavaDependencyAnalysisService(parser);
+        BlastRadiusAnalysisService blastRadius = new BlastRadiusAnalysisService();
+        ImpactReportService realReportService = new ImpactReportService(
+            depService, blastRadius, new JavaMethodAnalysisService(), new TestImpactAnalysisService(), new VerificationPlanService()
+        );
+        PullRequestImpactService serviceWithIndex = new PullRequestImpactService(
+            gitHubGateway,
+            new GitDiffTypeExtractor(),
+            realReportService,
+            mockLoader,
+            new GraphOverlayService()
+        );
+
+        String owner = "octocat";
+        String repo = "order-platform";
+        String baseSha = "base_exact_111";
+        String headSha = "head_exact_999";
+        PullRequestMetadata pr = new PullRequestMetadata(owner, repo, 301, "Refactor service", baseSha, headSha, PullRequestState.OPEN);
+        when(gitHubGateway.getPullRequest(owner, repo, 301)).thenReturn(pr);
+
+        String prodPath = "src/main/java/com/example/OrderService.java";
+        PullRequestFileChange change = new PullRequestFileChange(prodPath, FileChangeStatus.MODIFIED, 5, 2, "@@ -1,3 +1,3 @@");
+        when(gitHubGateway.getPullRequestFiles(owner, repo, 301)).thenReturn(List.of(change));
+
+        String headSource = """
+            package com.example;
+            public class OrderService {
+                public void process() {}
+            }
+            """;
+        when(gitHubGateway.getFileContent(owner, repo, prodPath, headSha))
+            .thenReturn(new SourceFileContent(prodPath, headSource, headSha));
+
+        // Base graph snapshot contains unchanged OrderController depending on OrderService
+        String controllerPath = "src/main/java/com/example/OrderController.java";
+        BaseGraphSnapshot snapshot = new BaseGraphSnapshot(
+            List.of(
+                new IndexedTypeDto("com.example.OrderService", prodPath),
+                new IndexedTypeDto("com.example.OrderController", controllerPath)
+            ),
+            List.of(
+                new TypeDependency("com.example.OrderController", "com.example.OrderService", RelationshipKind.FIELD, controllerPath)
+            )
+        );
+
+        when(mockLoader.loadIndex(owner, repo, baseSha)).thenReturn(
+            new RepositoryIndexLoadResult.Usable(baseSha, RepositoryIndexStatus.COMPLETED, false, 50, 50, snapshot)
+        );
+
+        // GitHub tree returns no test files
+        when(gitHubGateway.getGitTree(owner, repo, baseSha))
+            .thenReturn(new GitTreeResult(List.of("src/main/java/com/example/OrderController.java"), false));
+
+        PullRequestImpactResult result = serviceWithIndex.analyzePullRequest(owner, repo, 301);
+
+        assertThat(result.impactReport()).isNotNull();
+        AnalysisCoverage coverage = result.impactReport().coverage();
+        assertThat(coverage).isNotNull();
+        assertThat(coverage.scope()).isEqualTo(CoverageScope.FULL_REPOSITORY_INDEX);
+        assertThat(coverage.isComplete()).isTrue();
+        assertThat(coverage.baseCommitSha()).isEqualTo(baseSha);
+        assertThat(coverage.productionFilesDiscovered()).isEqualTo(50);
+        assertThat(coverage.productionFilesIncluded()).isEqualTo(50);
+        assertThat(coverage.incompleteReasons()).isEmpty();
+
+        // Production files were never retrieved via GitHub Gateway because overlay succeeded
+        verify(gitHubGateway, never()).getFilesContent(eq(owner), eq(repo), anyList(), eq(baseSha));
+
+        // Blast radius includes OrderController from overlaid base graph
+        assertThat(result.impactReport().affectedTypes())
+            .extracting(AffectedType::typeName)
+            .contains("com.example.OrderController");
+    }
+
+    @Test
+    void analyze_withPartialExactBaseIndex_usesOverlayAndPartialCoverage() {
+        RepositoryIndexLoader mockLoader = mock(RepositoryIndexLoader.class);
+        ImpactReportService realReportService = new ImpactReportService(
+            new JavaDependencyAnalysisService(new JavaSourceParserService()),
+            new BlastRadiusAnalysisService(),
+            new JavaMethodAnalysisService(),
+            new TestImpactAnalysisService(),
+            new VerificationPlanService()
+        );
+        PullRequestImpactService serviceWithIndex = new PullRequestImpactService(
+            gitHubGateway,
+            new GitDiffTypeExtractor(),
+            realReportService,
+            mockLoader,
+            new GraphOverlayService()
+        );
+
+        String owner = "octocat";
+        String repo = "order-platform";
+        String baseSha = "base_exact_222";
+        String headSha = "head_exact_888";
+        PullRequestMetadata pr = new PullRequestMetadata(owner, repo, 302, "Update logic", baseSha, headSha, PullRequestState.OPEN);
+        when(gitHubGateway.getPullRequest(owner, repo, 302)).thenReturn(pr);
+
+        String prodPath = "src/main/java/com/example/OrderService.java";
+        PullRequestFileChange change = new PullRequestFileChange(prodPath, FileChangeStatus.MODIFIED, 2, 1, "@@ -1 +1 @@");
+        when(gitHubGateway.getPullRequestFiles(owner, repo, 302)).thenReturn(List.of(change));
+        when(gitHubGateway.getFileContent(owner, repo, prodPath, headSha))
+            .thenReturn(new SourceFileContent(prodPath, "package com.example; public class OrderService {}", headSha));
+
+        BaseGraphSnapshot snapshot = new BaseGraphSnapshot(
+            List.of(new IndexedTypeDto("com.example.OrderService", prodPath)),
+            List.of()
+        );
+
+        when(mockLoader.loadIndex(owner, repo, baseSha)).thenReturn(
+            new RepositoryIndexLoadResult.Usable(baseSha, RepositoryIndexStatus.PARTIAL, true, 500, 200, snapshot)
+        );
+        when(gitHubGateway.getGitTree(owner, repo, baseSha))
+            .thenReturn(new GitTreeResult(List.of(), false));
+
+        PullRequestImpactResult result = serviceWithIndex.analyzePullRequest(owner, repo, 302);
+
+        assertThat(result.impactReport()).isNotNull();
+        AnalysisCoverage coverage = result.impactReport().coverage();
+        assertThat(coverage).isNotNull();
+        assertThat(coverage.scope()).isEqualTo(CoverageScope.PARTIAL_INDEX_BOUNDED);
+        assertThat(coverage.isComplete()).isFalse();
+        assertThat(coverage.isTruncatedOrCapped()).isTrue();
+        assertThat(coverage.baseCommitSha()).isEqualTo(baseSha);
+        assertThat(coverage.incompleteReasons()).anyMatch(r -> r.contains("partial or was capped"));
+    }
+
+    @Test
+    void analyze_withPendingOrIndexingBaseIndex_fallsBackToBoundedDiscovery() {
+        RepositoryIndexLoader mockLoader = mock(RepositoryIndexLoader.class);
+        ImpactReportService realReportService = new ImpactReportService(
+            new JavaDependencyAnalysisService(new JavaSourceParserService()),
+            new BlastRadiusAnalysisService(),
+            new JavaMethodAnalysisService(),
+            new TestImpactAnalysisService(),
+            new VerificationPlanService()
+        );
+        PullRequestImpactService serviceWithIndex = new PullRequestImpactService(
+            gitHubGateway,
+            new GitDiffTypeExtractor(),
+            realReportService,
+            mockLoader,
+            new GraphOverlayService()
+        );
+
+        String owner = "octocat";
+        String repo = "order-platform";
+        String baseSha = "base_exact_333";
+        String headSha = "head_exact_777";
+        PullRequestMetadata pr = new PullRequestMetadata(owner, repo, 303, "Update logic", baseSha, headSha, PullRequestState.OPEN);
+        when(gitHubGateway.getPullRequest(owner, repo, 303)).thenReturn(pr);
+
+        String prodPath = "src/main/java/com/example/OrderService.java";
+        PullRequestFileChange change = new PullRequestFileChange(prodPath, FileChangeStatus.MODIFIED, 2, 1, "@@ -1 +1 @@");
+        when(gitHubGateway.getPullRequestFiles(owner, repo, 303)).thenReturn(List.of(change));
+        when(gitHubGateway.getFileContent(owner, repo, prodPath, headSha))
+            .thenReturn(new SourceFileContent(prodPath, "package com.example; public class OrderService {}", headSha));
+
+        when(mockLoader.loadIndex(owner, repo, baseSha)).thenReturn(
+            new RepositoryIndexLoadResult.Unusable(baseSha, RepositoryIndexStatus.INDEXING, "Index is in progress")
+        );
+
+        when(gitHubGateway.getGitTree(owner, repo, baseSha))
+            .thenReturn(new GitTreeResult(List.of(), false));
+
+        PullRequestImpactResult result = serviceWithIndex.analyzePullRequest(owner, repo, 303);
+
+        assertThat(result.impactReport()).isNotNull();
+        AnalysisCoverage coverage = result.impactReport().coverage();
+        assertThat(coverage).isNotNull();
+        assertThat(coverage.scope()).isEqualTo(CoverageScope.PARTIAL_INDEX_BOUNDED);
+        assertThat(coverage.isComplete()).isFalse();
+        assertThat(coverage.incompleteReasons()).anyMatch(r -> r.contains("INDEXING"));
+    }
+
+    @Test
+    void analyze_withMissingBaseIndex_ignoresLastIndexedCommitAndFallsBack() {
+        RepositoryIndexLoader mockLoader = mock(RepositoryIndexLoader.class);
+        ImpactReportService realReportService = new ImpactReportService(
+            new JavaDependencyAnalysisService(new JavaSourceParserService()),
+            new BlastRadiusAnalysisService(),
+            new JavaMethodAnalysisService(),
+            new TestImpactAnalysisService(),
+            new VerificationPlanService()
+        );
+        PullRequestImpactService serviceWithIndex = new PullRequestImpactService(
+            gitHubGateway,
+            new GitDiffTypeExtractor(),
+            realReportService,
+            mockLoader,
+            new GraphOverlayService()
+        );
+
+        String owner = "octocat";
+        String repo = "order-platform";
+        String baseSha = "base_exact_444";
+        String headSha = "head_exact_666";
+        PullRequestMetadata pr = new PullRequestMetadata(owner, repo, 304, "Update logic", baseSha, headSha, PullRequestState.OPEN);
+        when(gitHubGateway.getPullRequest(owner, repo, 304)).thenReturn(pr);
+
+        String prodPath = "src/main/java/com/example/OrderService.java";
+        PullRequestFileChange change = new PullRequestFileChange(prodPath, FileChangeStatus.MODIFIED, 2, 1, "@@ -1 +1 @@");
+        when(gitHubGateway.getPullRequestFiles(owner, repo, 304)).thenReturn(List.of(change));
+        when(gitHubGateway.getFileContent(owner, repo, prodPath, headSha))
+            .thenReturn(new SourceFileContent(prodPath, "package com.example; public class OrderService {}", headSha));
+
+        // Returns NotFound for base_exact_444
+        when(mockLoader.loadIndex(owner, repo, baseSha)).thenReturn(
+            new RepositoryIndexLoadResult.NotFound(baseSha, "No persistent index found for base commit base_exact_444")
+        );
+
+        when(gitHubGateway.getGitTree(owner, repo, baseSha))
+            .thenReturn(new GitTreeResult(List.of(), false));
+
+        PullRequestImpactResult result = serviceWithIndex.analyzePullRequest(owner, repo, 304);
+
+        assertThat(result.impactReport()).isNotNull();
+        AnalysisCoverage coverage = result.impactReport().coverage();
+        assertThat(coverage).isNotNull();
+        assertThat(coverage.scope()).isEqualTo(CoverageScope.PARTIAL_INDEX_BOUNDED);
+        assertThat(coverage.isComplete()).isFalse();
+        assertThat(coverage.incompleteReasons()).anyMatch(r -> r.contains("No usable base repository index found"));
+    }
+
+    @Test
+    void analyze_whenIndexLoadingThrowsException_resilientlyFallsBackWithWarning() {
+        RepositoryIndexLoader mockLoader = mock(RepositoryIndexLoader.class);
+        ImpactReportService realReportService = new ImpactReportService(
+            new JavaDependencyAnalysisService(new JavaSourceParserService()),
+            new BlastRadiusAnalysisService(),
+            new JavaMethodAnalysisService(),
+            new TestImpactAnalysisService(),
+            new VerificationPlanService()
+        );
+        PullRequestImpactService serviceWithIndex = new PullRequestImpactService(
+            gitHubGateway,
+            new GitDiffTypeExtractor(),
+            realReportService,
+            mockLoader,
+            new GraphOverlayService()
+        );
+
+        String owner = "octocat";
+        String repo = "order-platform";
+        String baseSha = "base_exact_555";
+        String headSha = "head_exact_555";
+        PullRequestMetadata pr = new PullRequestMetadata(owner, repo, 305, "Update logic", baseSha, headSha, PullRequestState.OPEN);
+        when(gitHubGateway.getPullRequest(owner, repo, 305)).thenReturn(pr);
+
+        String prodPath = "src/main/java/com/example/OrderService.java";
+        PullRequestFileChange change = new PullRequestFileChange(prodPath, FileChangeStatus.MODIFIED, 2, 1, "@@ -1 +1 @@");
+        when(gitHubGateway.getPullRequestFiles(owner, repo, 305)).thenReturn(List.of(change));
+        when(gitHubGateway.getFileContent(owner, repo, prodPath, headSha))
+            .thenReturn(new SourceFileContent(prodPath, "package com.example; public class OrderService {}", headSha));
+
+        when(mockLoader.loadIndex(owner, repo, baseSha)).thenThrow(
+            new RuntimeException("Database connection timeout")
+        );
+
+        when(gitHubGateway.getGitTree(owner, repo, baseSha))
+            .thenReturn(new GitTreeResult(List.of(), false));
+
+        PullRequestImpactResult result = serviceWithIndex.analyzePullRequest(owner, repo, 305);
+
+        assertThat(result.impactReport()).isNotNull();
+        assertThat(result.extractionWarnings()).anyMatch(w -> w.contains("Database connection timeout"));
+        AnalysisCoverage coverage = result.impactReport().coverage();
+        assertThat(coverage).isNotNull();
+        assertThat(coverage.scope()).isEqualTo(CoverageScope.PARTIAL_INDEX_BOUNDED);
+        assertThat(coverage.incompleteReasons()).anyMatch(r -> r.contains("Failed to load base repository index"));
     }
 }

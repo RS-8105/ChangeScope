@@ -21,6 +21,10 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -348,6 +352,29 @@ public class RestGitHubGateway implements GitHubGateway {
         return new GitTreeResult(paths, truncated);
     }
 
+    @Override
+    public String getBranchHeadCommit(String owner, String repo, String branch) {
+        validateRepoCoordinates(owner, repo);
+        if (branch == null || branch.isBlank()) {
+            throw new IllegalArgumentException("Branch name must not be null or blank");
+        }
+        String cleanBranch = branch.trim();
+        String resourceDesc = "Branch " + cleanBranch + " for " + owner + "/" + repo;
+
+        GitHubBranchWire wire = executeWithExceptionHandling(resourceDesc, () ->
+            restClient.get()
+                .uri("/repos/{owner}/{repo}/branches/{branch}", owner, repo, cleanBranch)
+                .retrieve()
+                .body(GitHubBranchWire.class)
+        );
+
+        if (wire == null || wire.commit() == null || wire.commit().sha() == null || wire.commit().sha().isBlank()) {
+            throw new GitHubApiException(500, "MALFORMED_RESPONSE", "Received null or empty branch HEAD commit for " + resourceDesc);
+        }
+
+        return wire.commit().sha().trim();
+    }
+
     private String decodeContent(String content, String encoding) {
         if (content == null || content.isBlank()) {
             return "";
@@ -383,6 +410,8 @@ public class RestGitHubGateway implements GitHubGateway {
             return requestSupplier.get();
         } catch (RestClientResponseException ex) {
             int status = ex.getStatusCode().value();
+            Duration retryAfter = parseRetryAfter(ex.getResponseHeaders() != null ? ex.getResponseHeaders().getFirst("Retry-After") : null);
+
             if (status == 401) {
                 throw new GitHubAuthenticationException(401, "GitHub API authentication failed (HTTP 401). Verify configured credentials.");
             } else if (status == 403) {
@@ -396,17 +425,22 @@ public class RestGitHubGateway implements GitHubGateway {
                     String resetTime = (ex.getResponseHeaders() != null)
                         ? ex.getResponseHeaders().getFirst("X-RateLimit-Reset")
                         : "unknown";
-                    throw new GitHubRateLimitException("GitHub API rate limit exceeded (HTTP 403). Reset at: " + resetTime);
+                    Instant resetAt = parseResetTime(resetTime);
+                    throw new GitHubRateLimitException("GitHub API rate limit exceeded (HTTP 403). Reset at: " + resetTime, resetAt, retryAfter);
                 }
                 throw new GitHubAuthenticationException(403, "GitHub API access forbidden (HTTP 403) for " + resourceDesc);
             } else if (status == 404) {
                 throw new GitHubResourceNotFoundException("Resource not found on GitHub (HTTP 404): " + resourceDesc);
             } else if (status == 429) {
-                throw new GitHubRateLimitException("GitHub API rate limit exceeded (HTTP 429) for " + resourceDesc);
+                String resetTime = (ex.getResponseHeaders() != null)
+                    ? ex.getResponseHeaders().getFirst("X-RateLimit-Reset")
+                    : null;
+                Instant resetAt = parseResetTime(resetTime);
+                throw new GitHubRateLimitException("GitHub API rate limit exceeded (HTTP 429) for " + resourceDesc, resetAt, retryAfter);
             } else if (status >= 500) {
-                throw new GitHubApiException(status, "GITHUB_SERVER_ERROR", "GitHub API server error (HTTP " + status + ") for " + resourceDesc);
+                throw new GitHubApiException(status, "GITHUB_SERVER_ERROR", "GitHub API server error (HTTP " + status + ") for " + resourceDesc, ex, retryAfter);
             } else {
-                throw new GitHubApiException(status, "GITHUB_CLIENT_ERROR", "GitHub API request failed (HTTP " + status + ") for " + resourceDesc);
+                throw new GitHubApiException(status, "GITHUB_CLIENT_ERROR", "GitHub API request failed (HTTP " + status + ") for " + resourceDesc, ex, retryAfter);
             }
         } catch (ResourceAccessException ex) {
             throw new GitHubApiException(503, "NETWORK_ERROR", "Network error communicating with GitHub API for " + resourceDesc + ": " + ex.getMessage(), ex);
@@ -415,6 +449,37 @@ public class RestGitHubGateway implements GitHubGateway {
                 throw gha;
             }
             throw new GitHubApiException(500, "MALFORMED_RESPONSE", "Failed to parse or process GitHub response for " + resourceDesc + ": " + ex.getMessage(), ex);
+        }
+    }
+
+    public static Duration parseRetryAfter(String headerValue) {
+        if (headerValue == null || headerValue.isBlank()) {
+            return null;
+        }
+        try {
+            long seconds = Long.parseLong(headerValue.trim());
+            return Duration.ofSeconds(Math.max(1, seconds));
+        } catch (NumberFormatException ignored) {
+            try {
+                ZonedDateTime date = ZonedDateTime.parse(headerValue.trim(), DateTimeFormatter.RFC_1123_DATE_TIME);
+                Instant target = date.toInstant();
+                Duration diff = Duration.between(Instant.now(), target);
+                return diff.isNegative() ? Duration.ofSeconds(1) : diff;
+            } catch (Exception ex) {
+                return null;
+            }
+        }
+    }
+
+    public static Instant parseResetTime(String resetHeader) {
+        if (resetHeader == null || resetHeader.isBlank() || "unknown".equalsIgnoreCase(resetHeader.trim())) {
+            return null;
+        }
+        try {
+            long epochSec = Long.parseLong(resetHeader.trim());
+            return Instant.ofEpochSecond(epochSec);
+        } catch (Exception ex) {
+            return null;
         }
     }
 
@@ -440,6 +505,12 @@ public class RestGitHubGateway implements GitHubGateway {
     @JsonIgnoreProperties(ignoreUnknown = true)
     record GitHubCommitRefWire(
         String sha
+    ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record GitHubBranchWire(
+        String name,
+        GitHubCommitRefWire commit
     ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)

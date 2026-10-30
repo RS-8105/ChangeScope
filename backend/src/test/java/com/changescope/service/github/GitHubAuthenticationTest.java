@@ -143,12 +143,12 @@ class GitHubAuthenticationTest {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer mockServer = MockRestServiceServer.bindTo(builder).build();
 
-        String tokenResponse = """
+        String tokenResponse = String.format("""
             {
               "token": "ghs_installation_token_alpha",
-              "expires_at": "2026-10-17T16:00:00Z"
+              "expires_at": "%s"
             }
-            """;
+            """, Instant.now().plusSeconds(3600));
 
         // Expected only ONCE due to caching
         mockServer.expect(requestTo("https://api.github.com/app/installations/5555/access_tokens"))

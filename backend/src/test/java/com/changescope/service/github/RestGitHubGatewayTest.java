@@ -394,4 +394,47 @@ class RestGitHubGatewayTest {
             .isInstanceOf(GitHubResourceNotFoundException.class)
             .hasMessageContaining("Resource not found on GitHub (HTTP 404)");
     }
+
+    @Test
+    void getBranchHeadCommit_successfulResponse_returnsCommitSha() {
+        RestGitHubGateway gateway = new RestGitHubGateway(properties, restClientBuilder);
+
+        String json = """
+            {
+              "name": "main",
+              "commit": {
+                "sha": "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d"
+              }
+            }
+            """;
+
+        mockServer.expect(requestTo("https://api.github.com/repos/octocat/Hello-World/branches/main"))
+            .andRespond(withSuccess(json, MediaType.APPLICATION_JSON));
+
+        String sha = gateway.getBranchHeadCommit("octocat", "Hello-World", "main");
+
+        mockServer.verify();
+        assertThat(sha).isEqualTo("7fd1a60b01f91b314f59955a4e4d4e80d8edf11d");
+    }
+
+    @Test
+    void getBranchHeadCommit_blankBranch_throwsIllegalArgumentException() {
+        RestGitHubGateway gateway = new RestGitHubGateway(properties, restClientBuilder);
+
+        assertThatThrownBy(() -> gateway.getBranchHeadCommit("octocat", "Hello-World", "   "))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("Branch name must not be null or blank");
+    }
+
+    @Test
+    void getBranchHeadCommit_notFound_throwsResourceNotFoundException() {
+        RestGitHubGateway gateway = new RestGitHubGateway(properties, restClientBuilder);
+
+        mockServer.expect(requestTo("https://api.github.com/repos/octocat/Hello-World/branches/nonexistent"))
+            .andRespond(withStatus(HttpStatus.NOT_FOUND));
+
+        assertThatThrownBy(() -> gateway.getBranchHeadCommit("octocat", "Hello-World", "nonexistent"))
+            .isInstanceOf(GitHubResourceNotFoundException.class)
+            .hasMessageContaining("Resource not found on GitHub (HTTP 404)");
+    }
 }

@@ -44,5 +44,22 @@ public interface PullRequestAnalysisRepository extends JpaRepository<PullRequest
         @Param("failureSummary") String failureSummary
     );
 
-    void deleteByRepositoryId(Long repositoryId);
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("DELETE FROM PullRequestAnalysisEntity a WHERE a.repository.id = :repositoryId")
+    int deleteByRepositoryId(@Param("repositoryId") Long repositoryId);
+
+    @Query("SELECT a.id FROM PullRequestAnalysisEntity a " +
+           "WHERE a.status = :status " +
+           "  AND ((a.completedAt IS NOT NULL AND a.completedAt < :cutoff) " +
+           "       OR (a.completedAt IS NULL AND a.startedAt < :cutoff)) " +
+           "ORDER BY a.id ASC")
+    List<Long> findExpiredAnalysisIds(
+        @Param("status") AnalysisStatus status,
+        @Param("cutoff") Instant cutoff,
+        Pageable pageable
+    );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("DELETE FROM PullRequestAnalysisEntity a WHERE a.id IN :ids")
+    int deleteByIdIn(@Param("ids") List<Long> ids);
 }

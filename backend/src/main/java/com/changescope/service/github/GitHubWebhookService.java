@@ -4,6 +4,7 @@ import com.changescope.dto.WebhookResponse;
 import com.changescope.exception.GitHubAuthenticationException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -17,6 +18,7 @@ public class GitHubWebhookService {
     private final ObjectMapper objectMapper;
     private final GitHubWebhookDeliveryService deliveryService;
     private final GitHubPullRequestEventProcessor pullRequestEventProcessor;
+    private final GitHubPushEventProcessor pushEventProcessor;
 
     public GitHubWebhookService(
         GitHubWebhookSignatureVerifier signatureVerifier,
@@ -24,10 +26,22 @@ public class GitHubWebhookService {
         GitHubWebhookDeliveryService deliveryService,
         GitHubPullRequestEventProcessor pullRequestEventProcessor
     ) {
+        this(signatureVerifier, objectMapper, deliveryService, pullRequestEventProcessor, null);
+    }
+
+    @Autowired
+    public GitHubWebhookService(
+        GitHubWebhookSignatureVerifier signatureVerifier,
+        ObjectMapper objectMapper,
+        GitHubWebhookDeliveryService deliveryService,
+        GitHubPullRequestEventProcessor pullRequestEventProcessor,
+        GitHubPushEventProcessor pushEventProcessor
+    ) {
         this.signatureVerifier = signatureVerifier;
         this.objectMapper = objectMapper;
         this.deliveryService = deliveryService;
         this.pullRequestEventProcessor = pullRequestEventProcessor;
+        this.pushEventProcessor = pushEventProcessor;
     }
 
     /**
@@ -92,6 +106,12 @@ public class GitHubWebhookService {
                 response = WebhookResponse.accepted(cleanEvent, cleanDelivery, "Event 'ping' acknowledged");
             } else if ("pull_request".equals(cleanEvent)) {
                 response = pullRequestEventProcessor.processPullRequestEvent(rootNode, cleanDelivery);
+            } else if ("push".equals(cleanEvent)) {
+                if (pushEventProcessor != null) {
+                    response = pushEventProcessor.processPushEvent(rootNode, cleanDelivery);
+                } else {
+                    response = WebhookResponse.ignored(cleanEvent, cleanDelivery, "Event 'push' is currently ignored");
+                }
             } else {
                 response = WebhookResponse.ignored(cleanEvent, cleanDelivery, "Event '" + cleanEvent + "' is currently ignored");
             }

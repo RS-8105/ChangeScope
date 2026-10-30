@@ -196,4 +196,113 @@ class RepositoryControllerTest {
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.error").value("NOT_FOUND"));
     }
+
+    @Test
+    void deleteRepository_invalidId_returns400() throws Exception {
+        mockMvc.perform(delete("/api/v1/repositories/0"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error").value("BAD_REQUEST"));
+
+        mockMvc.perform(delete("/api/v1/repositories/-5"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error").value("BAD_REQUEST"));
+    }
+
+    @Test
+    void deleteAnalysis_success_returns204NoContent() throws Exception {
+        doNothing().when(pullRequestAnalysisService).deleteAnalysis(1L, 10L);
+
+        mockMvc.perform(delete("/api/v1/repositories/1/analyses/10"))
+            .andExpect(status().isNoContent());
+
+        verify(pullRequestAnalysisService).deleteAnalysis(1L, 10L);
+    }
+
+    @Test
+    void deleteAnalysis_notFound_returns404() throws Exception {
+        doThrow(new ResourceNotFoundException("Analysis not found with id: 999"))
+            .when(pullRequestAnalysisService).deleteAnalysis(1L, 999L);
+
+        mockMvc.perform(delete("/api/v1/repositories/1/analyses/999"))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.error").value("NOT_FOUND"));
+    }
+
+    @Test
+    void deleteAnalysis_ownershipMismatch_returns404() throws Exception {
+        doThrow(new ResourceNotFoundException("Analysis with id 20 does not belong to repository with id 1"))
+            .when(pullRequestAnalysisService).deleteAnalysis(1L, 20L);
+
+        mockMvc.perform(delete("/api/v1/repositories/1/analyses/20"))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.error").value("NOT_FOUND"));
+    }
+
+    @Test
+    void deleteAnalysis_invalidIds_returns400() throws Exception {
+        mockMvc.perform(delete("/api/v1/repositories/0/analyses/10"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error").value("BAD_REQUEST"));
+
+        mockMvc.perform(delete("/api/v1/repositories/1/analyses/0"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error").value("BAD_REQUEST"));
+    }
+
+    @Test
+    void deleteAllAnalyses_success_returns200WithDeletedCount() throws Exception {
+        when(pullRequestAnalysisService.deleteAllAnalyses(1L)).thenReturn(4);
+
+        mockMvc.perform(delete("/api/v1/repositories/1/analyses"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.repositoryId").value(1))
+            .andExpect(jsonPath("$.deletedCount").value(4))
+            .andExpect(jsonPath("$.count").value(4));
+
+        verify(pullRequestAnalysisService).deleteAllAnalyses(1L);
+    }
+
+    @Test
+    void deleteAllAnalyses_repositoryNotFound_returns404() throws Exception {
+        doThrow(new ResourceNotFoundException("Repository not found with id: 999"))
+            .when(pullRequestAnalysisService).deleteAllAnalyses(999L);
+
+        mockMvc.perform(delete("/api/v1/repositories/999/analyses"))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.error").value("NOT_FOUND"));
+    }
+
+    @Test
+    void deleteAllAnalyses_invalidId_returns400() throws Exception {
+        mockMvc.perform(delete("/api/v1/repositories/0/analyses"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error").value("BAD_REQUEST"));
+    }
+
+    @Test
+    void deleteRepositoryIndex_success_returns204NoContent() throws Exception {
+        doNothing().when(repositoryService).deleteRepositoryIndex(1L);
+
+        mockMvc.perform(delete("/api/v1/repositories/1/index"))
+            .andExpect(status().isNoContent());
+
+        verify(repositoryService).deleteRepositoryIndex(1L);
+    }
+
+    @Test
+    void deleteRepositoryIndex_repositoryNotFound_returns404() throws Exception {
+        doThrow(new ResourceNotFoundException("Repository not found with id: 999"))
+            .when(repositoryService).deleteRepositoryIndex(999L);
+
+        mockMvc.perform(delete("/api/v1/repositories/999/index"))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.error").value("NOT_FOUND"));
+    }
+
+    @Test
+    void deleteRepositoryIndex_invalidId_returns400() throws Exception {
+        mockMvc.perform(delete("/api/v1/repositories/0/index"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error").value("BAD_REQUEST"));
+    }
 }

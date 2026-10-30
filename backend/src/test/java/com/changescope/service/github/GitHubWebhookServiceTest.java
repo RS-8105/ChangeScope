@@ -35,6 +35,9 @@ class GitHubWebhookServiceTest {
     @Mock
     private GitHubPullRequestEventProcessor pullRequestEventProcessor;
 
+    @Mock
+    private GitHubPushEventProcessor pushEventProcessor;
+
     private GitHubWebhookService webhookService;
     private ObjectMapper objectMapper;
 
@@ -45,7 +48,8 @@ class GitHubWebhookServiceTest {
             signatureVerifier,
             objectMapper,
             deliveryService,
-            pullRequestEventProcessor
+            pullRequestEventProcessor,
+            pushEventProcessor
         );
     }
 
@@ -129,16 +133,69 @@ class GitHubWebhookServiceTest {
 
     @Test
     void processWebhook_unsupportedEvent_marksProcessedAndReturnsIgnored() {
-        byte[] payload = "{\"ref\":\"refs/heads/main\"}".getBytes(StandardCharsets.UTF_8);
+        byte[] payload = "{\"action\":\"created\"}".getBytes(StandardCharsets.UTF_8);
         when(signatureVerifier.verifySignature(payload, SIGNATURE)).thenReturn(true);
-        when(deliveryService.registerDelivery(DELIVERY_ID, "push")).thenReturn(true);
+        when(deliveryService.registerDelivery(DELIVERY_ID, "issues")).thenReturn(true);
 
-        WebhookResponse response = webhookService.processWebhook(payload, SIGNATURE, "push", DELIVERY_ID);
+        WebhookResponse response = webhookService.processWebhook(payload, SIGNATURE, "issues", DELIVERY_ID);
 
         assertThat(response.status()).isEqualTo("ignored");
         verify(pullRequestEventProcessor, never()).processPullRequestEvent(any(), any());
+        verify(pushEventProcessor, never()).processPushEvent(any(), any());
         verify(deliveryService, times(1)).markProcessed(DELIVERY_ID);
         verify(deliveryService, never()).markFailed(any(), any(Throwable.class));
+    }
+
+    @Test
+    void processWebhook_successfulPushEvent_marksProcessedAndReturnsAccepted() {
+        byte[] payload = "{\"ref\":\"refs/heads/main\",\"after\":\"6dcb09b5b57875f334f61aebed695e2e4193db5e\"}".getBytes(StandardCharsets.UTF_8);
+        when(signatureVerifier.verifySignature(payload, SIGNATURE)).thenReturn(true);
+        when(deliveryService.registerDelivery(DELIVERY_ID, "push")).thenReturn(true);
+        when(pushEventProcessor.processPushEvent(any(JsonNode.class), eq(DELIVERY_ID)))
+            .thenReturn(WebhookResponse.accepted("push", DELIVERY_ID, "Push accepted"));
+
+        WebhookResponse response = webhookService.processWebhook(payload, SIGNATURE, "push", DELIVERY_ID);
+
+        assertThat(response.status()).isEqualTo("accepted");
+        verify(pushEventProcessor, times(1)).processPushEvent(any(JsonNode.class), eq(DELIVERY_ID));
+        verify(pullRequestEventProcessor, never()).processPullRequestEvent(any(), any());
+        verify(deliveryService, times(1)).markProcessed(DELIVERY_ID);
+        verify(deliveryService, never()).markFailed(any(), any(Throwable.class));
+    }
+
+    @Test
+    void processWebhook_pushEventFailure_marksFailedAndRethrows() {
+        byte[] payload = "{\"ref\":\"refs/heads/main\",\"after\":\"6dcb09b5b57875f334f61aebed695e2e4193db5e\"}".getBytes(StandardCharsets.UTF_8);
+        when(signatureVerifier.verifySignature(payload, SIGNATURE)).thenReturn(true);
+        when(deliveryService.registerDelivery(DELIVERY_ID, "push")).thenReturn(true);
+
+        ResourceNotFoundException notFound = new ResourceNotFoundException("Repository not found with owner 'octocat' and name 'repo'");
+        when(pushEventProcessor.processPushEvent(any(JsonNode.class), eq(DELIVERY_ID)))
+            .thenThrow(notFound);
+
+        assertThatThrownBy(() -> webhookService.processWebhook(payload, SIGNATURE, "push", DELIVERY_ID))
+            .isSameAs(notFound);
+
+        verify(deliveryService, times(1)).markFailed(eq(DELIVERY_ID), eq(notFound));
+        verify(deliveryService, never()).markProcessed(any());
+    }
+
+    @Test
+    void processWebhook_pushEventRejectedByExecutor_marksFailedAndRethrows() {
+        byte[] payload = "{\"ref\":\"refs/heads/main\",\"after\":\"6dcb09b5b57875f334f61aebed695e2e4193db5e\"}".getBytes(StandardCharsets.UTF_8);
+        when(signatureVerifier.verifySignature(payload, SIGNATURE)).thenReturn(true);
+        when(deliveryService.registerDelivery(DELIVERY_ID, "push")).thenReturn(true);
+
+        java.util.concurrent.RejectedExecutionException rejection =
+            new java.util.concurrent.RejectedExecutionException("Indexing executor queue full");
+        when(pushEventProcessor.processPushEvent(any(JsonNode.class), eq(DELIVERY_ID)))
+            .thenThrow(rejection);
+
+        assertThatThrownBy(() -> webhookService.processWebhook(payload, SIGNATURE, "push", DELIVERY_ID))
+            .isSameAs(rejection);
+
+        verify(deliveryService, times(1)).markFailed(eq(DELIVERY_ID), eq(rejection));
+        verify(deliveryService, never()).markProcessed(any());
     }
 
     @Test

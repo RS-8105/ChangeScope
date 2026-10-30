@@ -244,10 +244,11 @@ public class GitHubWebhookDeliveryService {
             }
         }
 
-        // 4. Network and I/O errors
+        // 4. Network, concurrency, and I/O errors (transient)
         if (throwable instanceof org.springframework.web.client.ResourceAccessException
             || throwable instanceof java.io.IOException
-            || throwable instanceof java.util.concurrent.TimeoutException) {
+            || throwable instanceof java.util.concurrent.TimeoutException
+            || throwable instanceof java.util.concurrent.RejectedExecutionException) {
             return true;
         }
 

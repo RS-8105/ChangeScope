@@ -45,6 +45,9 @@ class GitHubWebhookControllerTest {
     @MockBean
     private GitHubPullRequestEventProcessor pullRequestEventProcessor;
 
+    @MockBean
+    private com.changescope.service.github.GitHubPushEventProcessor pushEventProcessor;
+
     @SpyBean
     private ObjectMapper objectMapper;
 
@@ -127,26 +130,26 @@ class GitHubWebhookControllerTest {
 
     @Test
     void handleWebhook_validUnsupportedEvent_returns202Ignored() throws Exception {
-        byte[] payload = "{\"ref\":\"refs/heads/main\",\"commits\":[]}".getBytes(StandardCharsets.UTF_8);
+        byte[] payload = "{\"action\":\"opened\"}".getBytes(StandardCharsets.UTF_8);
         when(signatureVerifier.verifySignature(any(byte[].class), eq(VALID_SIGNATURE))).thenReturn(true);
-        when(deliveryService.registerDelivery(DELIVERY_ID, "push")).thenReturn(true);
+        when(deliveryService.registerDelivery(DELIVERY_ID, "issues")).thenReturn(true);
 
         mockMvc.perform(post("/api/v1/webhooks/github")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(payload)
                 .header(GitHubWebhookSignatureVerifier.SIGNATURE_HEADER, VALID_SIGNATURE)
-                .header("X-GitHub-Event", "push")
+                .header("X-GitHub-Event", "issues")
                 .header("X-GitHub-Delivery", DELIVERY_ID))
             .andExpect(status().isAccepted())
             .andExpect(jsonPath("$.status").value("ignored"))
-            .andExpect(jsonPath("$.event").value("push"))
+            .andExpect(jsonPath("$.event").value("issues"))
             .andExpect(jsonPath("$.deliveryId").value(DELIVERY_ID))
             .andExpect(jsonPath("$.duplicate").value(false))
-            .andExpect(jsonPath("$.message").value("Event 'push' is currently ignored"));
+            .andExpect(jsonPath("$.message").value("Event 'issues' is currently ignored"));
 
         verify(signatureVerifier).verifySignature(any(byte[].class), eq(VALID_SIGNATURE));
         verify(objectMapper).readTree(any(byte[].class));
-        verify(deliveryService).registerDelivery(DELIVERY_ID, "push");
+        verify(deliveryService).registerDelivery(DELIVERY_ID, "issues");
         verify(deliveryService).markProcessed(DELIVERY_ID);
     }
 

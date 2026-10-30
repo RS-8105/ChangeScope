@@ -28,6 +28,18 @@ class RepositoryServiceTest {
     @Mock
     private RepositoryEntityRepository repositoryEntityRepository;
 
+    @Mock
+    private com.changescope.repository.RepositoryIndexRepository repositoryIndexRepository;
+
+    @Mock
+    private com.changescope.repository.IndexedTypeRepository indexedTypeRepository;
+
+    @Mock
+    private com.changescope.repository.IndexedTypeDependencyRepository indexedTypeDependencyRepository;
+
+    @Mock
+    private com.changescope.repository.PullRequestAnalysisRepository pullRequestAnalysisRepository;
+
     @InjectMocks
     private RepositoryService repositoryService;
 
@@ -140,22 +152,73 @@ class RepositoryServiceTest {
 
     @Test
     void deleteRepository_success() {
-        when(repositoryEntityRepository.existsById(1L)).thenReturn(true);
-        doNothing().when(repositoryEntityRepository).deleteById(1L);
+        when(repositoryEntityRepository.findById(1L)).thenReturn(Optional.of(sampleEntity));
+        when(repositoryIndexRepository.findByRepositoryId(1L)).thenReturn(List.of());
 
         repositoryService.deleteRepository(1L);
 
-        verify(repositoryEntityRepository).deleteById(1L);
+        verify(pullRequestAnalysisRepository).deleteByRepositoryId(1L);
+        verify(repositoryIndexRepository).findByRepositoryId(1L);
+        verify(repositoryEntityRepository).delete(sampleEntity);
     }
 
     @Test
     void deleteRepository_notFound_throwsResourceNotFoundException() {
-        when(repositoryEntityRepository.existsById(999L)).thenReturn(false);
+        when(repositoryEntityRepository.findById(999L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> repositoryService.deleteRepository(999L))
             .isInstanceOf(ResourceNotFoundException.class)
             .hasMessageContaining("Repository not found with id: 999");
 
-        verify(repositoryEntityRepository, never()).deleteById(any());
+        verify(repositoryEntityRepository, never()).delete(any());
+    }
+
+    @Test
+    void deleteRepository_invalidId_throwsIllegalArgumentException() {
+        assertThatThrownBy(() -> repositoryService.deleteRepository(0L))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("positive integer");
+
+        assertThatThrownBy(() -> repositoryService.deleteRepository(-1L))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("positive integer");
+    }
+
+    @Test
+    void deleteRepositoryIndex_success() {
+        sampleEntity.setLastIndexedCommit("abc12345");
+        when(repositoryEntityRepository.findById(1L)).thenReturn(Optional.of(sampleEntity));
+        when(repositoryIndexRepository.findByRepositoryId(1L)).thenReturn(List.of());
+        when(repositoryEntityRepository.save(any(RepositoryEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        repositoryService.deleteRepositoryIndex(1L);
+
+        assertThat(sampleEntity.getLastIndexedCommit()).isNull();
+        verify(repositoryIndexRepository).findByRepositoryId(1L);
+        verify(repositoryEntityRepository).save(sampleEntity);
+        verify(pullRequestAnalysisRepository, never()).deleteByRepositoryId(any());
+        verify(repositoryEntityRepository, never()).delete(any());
+    }
+
+    @Test
+    void deleteRepositoryIndex_notFound_throwsResourceNotFoundException() {
+        when(repositoryEntityRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> repositoryService.deleteRepositoryIndex(999L))
+            .isInstanceOf(ResourceNotFoundException.class)
+            .hasMessageContaining("Repository not found with id: 999");
+
+        verify(repositoryEntityRepository, never()).save(any());
+    }
+
+    @Test
+    void deleteRepositoryIndex_invalidId_throwsIllegalArgumentException() {
+        assertThatThrownBy(() -> repositoryService.deleteRepositoryIndex(0L))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("positive integer");
+
+        assertThatThrownBy(() -> repositoryService.deleteRepositoryIndex(-1L))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("positive integer");
     }
 }

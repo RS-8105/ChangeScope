@@ -276,6 +276,56 @@ public class PullRequestAnalysisService {
         }
     }
 
+    /**
+     * Deletes a specific analysis record belonging to the given repository.
+     *
+     * @param repositoryId the ID of the repository owning the analysis
+     * @param analysisId the ID of the analysis to delete
+     * @throws IllegalArgumentException if IDs are null or non-positive
+     * @throws ResourceNotFoundException if repository or analysis is not found, or analysis does not belong to repository
+     */
+    @Transactional
+    public void deleteAnalysis(Long repositoryId, Long analysisId) {
+        if (repositoryId == null || repositoryId <= 0) {
+            throw new IllegalArgumentException("Repository ID must be a positive integer");
+        }
+        if (analysisId == null || analysisId <= 0) {
+            throw new IllegalArgumentException("Analysis ID must be a positive integer");
+        }
+        if (!repositoryEntityRepository.existsById(repositoryId)) {
+            throw new ResourceNotFoundException("Repository not found with id: " + repositoryId);
+        }
+
+        PullRequestAnalysisEntity entity = pullRequestAnalysisRepository.findById(analysisId)
+            .orElseThrow(() -> new ResourceNotFoundException("Analysis not found with id: " + analysisId));
+
+        if (entity.getRepository() == null || !entity.getRepository().getId().equals(repositoryId)) {
+            throw new ResourceNotFoundException("Analysis with id " + analysisId + " does not belong to repository with id " + repositoryId);
+        }
+
+        pullRequestAnalysisRepository.delete(entity);
+    }
+
+    /**
+     * Deletes all analysis history records belonging to the specified repository.
+     *
+     * @param repositoryId the ID of the repository whose analyses should be deleted
+     * @return the number of deleted analysis records
+     * @throws IllegalArgumentException if repositoryId is null or non-positive
+     * @throws ResourceNotFoundException if repository is not found
+     */
+    @Transactional
+    public int deleteAllAnalyses(Long repositoryId) {
+        if (repositoryId == null || repositoryId <= 0) {
+            throw new IllegalArgumentException("Repository ID must be a positive integer");
+        }
+        if (!repositoryEntityRepository.existsById(repositoryId)) {
+            throw new ResourceNotFoundException("Repository not found with id: " + repositoryId);
+        }
+
+        return pullRequestAnalysisRepository.deleteByRepositoryId(repositoryId);
+    }
+
     public static String sanitizeFailureSummary(Throwable throwable) {
         if (throwable == null) {
             return "Unknown error";

@@ -15,4 +15,31 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('@xyflow') || id.includes('@reactflow')) {
+              return 'vendor-xyflow'
+            }
+            if (
+              id.includes('/react/') ||
+              id.includes('/react-dom/') ||
+              id.includes('/react-router') ||
+              id.includes('/react-router-dom/')
+            ) {
+              return 'vendor-react'
+            }
+            if (id.includes('lucide-react')) {
+              return 'vendor-lucide'
+            }
+            if (id.includes('axios')) {
+              return 'vendor-axios'
+            }
+          }
+        },
+      },
+    },
+  },
 })

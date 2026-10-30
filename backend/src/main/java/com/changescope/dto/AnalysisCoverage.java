@@ -63,4 +63,20 @@ public record AnalysisCoverage(
             incompleteReasons
         );
     }
+
+    public static AnalysisCoverage fullRepositoryIndex(
+        String baseCommitSha,
+        int productionFilesDiscovered,
+        int productionFilesIncluded
+    ) {
+        return new AnalysisCoverage(
+            CoverageScope.FULL_REPOSITORY_INDEX,
+            baseCommitSha,
+            productionFilesDiscovered,
+            productionFilesIncluded,
+            false,
+            true,
+            List.of()
+        );
+    }
 }

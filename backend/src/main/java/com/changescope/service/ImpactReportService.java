@@ -73,7 +73,18 @@ public class ImpactReportService {
         List<String> changedTypes,
         AnalysisCoverage coverage
     ) {
-        DependencyAnalysisResult dependencyResult = dependencyAnalysisService.analyze(files);
+        return generateReport(files, changedTypes, coverage, null);
+    }
+
+    public ImpactReport generateReport(
+        List<JavaSourceFileInput> files,
+        List<String> changedTypes,
+        AnalysisCoverage coverage,
+        DependencyAnalysisResult precomputedDependencyResult
+    ) {
+        DependencyAnalysisResult dependencyResult = (precomputedDependencyResult != null)
+            ? precomputedDependencyResult
+            : dependencyAnalysisService.analyze(files);
         BlastRadiusResult blastRadiusResult = blastRadiusAnalysisService.analyze(dependencyResult, changedTypes);
         MethodAnalysisResult methodResult = javaMethodAnalysisService.analyze(files, changedTypes);
         TestImpactResult testImpactResult = testImpactAnalysisService.analyze(files, blastRadiusResult, methodResult);

@@ -2,6 +2,7 @@ package com.changescope.controller;
 
 import com.changescope.dto.AnalysisSummaryResponse;
 import com.changescope.dto.CreateRepositoryRequest;
+import com.changescope.dto.DeleteAnalysesResponse;
 import com.changescope.dto.PullRequestImpactResult;
 import com.changescope.dto.RepositoryResponse;
 import com.changescope.service.PullRequestAnalysisService;
@@ -57,7 +58,47 @@ public class RepositoryController {
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteRepository(@PathVariable Long id) {
+        if (id == null || id <= 0) {
+            throw new IllegalArgumentException("Repository ID must be a positive integer");
+        }
         repositoryService.deleteRepository(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/{id}/analyses/{analysisId}")
+    public ResponseEntity<Void> deleteAnalysis(
+        @PathVariable Long id,
+        @PathVariable Long analysisId
+    ) {
+        if (id == null || id <= 0) {
+            throw new IllegalArgumentException("Repository ID must be a positive integer");
+        }
+        if (analysisId == null || analysisId <= 0) {
+            throw new IllegalArgumentException("Analysis ID must be a positive integer");
+        }
+        pullRequestAnalysisService.deleteAnalysis(id, analysisId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/{id}/analyses")
+    public ResponseEntity<DeleteAnalysesResponse> deleteAllAnalyses(
+        @PathVariable Long id
+    ) {
+        if (id == null || id <= 0) {
+            throw new IllegalArgumentException("Repository ID must be a positive integer");
+        }
+        int deletedCount = pullRequestAnalysisService.deleteAllAnalyses(id);
+        return ResponseEntity.ok(new DeleteAnalysesResponse(id, deletedCount));
+    }
+
+    @DeleteMapping("/{id}/index")
+    public ResponseEntity<Void> deleteRepositoryIndex(
+        @PathVariable Long id
+    ) {
+        if (id == null || id <= 0) {
+            throw new IllegalArgumentException("Repository ID must be a positive integer");
+        }
+        repositoryService.deleteRepositoryIndex(id);
         return ResponseEntity.noContent().build();
     }
 

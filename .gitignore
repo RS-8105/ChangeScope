@@ -19,8 +19,11 @@ logs/
 *.bak
 hs_err_pid*
 replay_pid*
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
 
-# Node / Frontend
+# Frontend - Node / Vite
 node_modules/
 dist/
 dist-ssr/
@@ -28,7 +31,7 @@ build/
 .npm/
 .eslintcache
 
-# Java / Maven / Gradle
+# Backend - Java / Maven / Gradle
 target/
 *.class
 *.jar
@@ -36,7 +39,7 @@ target/
 *.ear
 .gradle/
 
-# Environment and Secrets
+# Environment variables and secrets
 .env
 .env.*
 !.env.example

@@ -47,6 +47,36 @@ class AnalysisReconciliationSchedulerTest {
     }
 
     @Test
+    void scheduleReconciliation_withRepositoryIndexingService_reconcilesBothAndCombinesCount() {
+        com.changescope.service.RepositoryIndexingService indexingService = org.mockito.Mockito.mock(com.changescope.service.RepositoryIndexingService.class);
+        AnalysisReconciliationScheduler dualScheduler = new AnalysisReconciliationScheduler(pullRequestAnalysisService, indexingService);
+
+        when(pullRequestAnalysisService.reconcileStaleAnalyses()).thenReturn(3);
+        when(indexingService.reconcileStaleIndexes()).thenReturn(2);
+
+        int result = dualScheduler.scheduleReconciliation();
+
+        assertThat(result).isEqualTo(5);
+        verify(pullRequestAnalysisService, times(1)).reconcileStaleAnalyses();
+        verify(indexingService, times(1)).reconcileStaleIndexes();
+    }
+
+    @Test
+    void scheduleReconciliation_whenRepositoryIndexingServiceThrows_containsFailureAndReturnsMinusOne() {
+        com.changescope.service.RepositoryIndexingService indexingService = org.mockito.Mockito.mock(com.changescope.service.RepositoryIndexingService.class);
+        AnalysisReconciliationScheduler dualScheduler = new AnalysisReconciliationScheduler(pullRequestAnalysisService, indexingService);
+
+        when(pullRequestAnalysisService.reconcileStaleAnalyses()).thenReturn(3);
+        when(indexingService.reconcileStaleIndexes()).thenThrow(new RuntimeException("DB lock error"));
+
+        int result = dualScheduler.scheduleReconciliation();
+
+        assertThat(result).isEqualTo(-1);
+        verify(pullRequestAnalysisService, times(1)).reconcileStaleAnalyses();
+        verify(indexingService, times(1)).reconcileStaleIndexes();
+    }
+
+    @Test
     void scheduleReconciliation_whenReconciliationThrows_containsFailureAndAllowsSubsequentInvocations() {
         // First invocation throws an exception (e.g. transient DB error with potential secrets)
         when(pullRequestAnalysisService.reconcileStaleAnalyses())
@@ -158,5 +188,18 @@ class AnalysisReconciliationSchedulerTest {
             .withUserConfiguration(TestPropertiesConfig.class)
             .withPropertyValues("analysis.reconciliation-interval=-5m")
             .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void scheduleDueRetryReconciliation_invokesReconcileDueRetriesAndReturnsCount() {
+        com.changescope.service.RepositoryIndexingService indexingService = org.mockito.Mockito.mock(com.changescope.service.RepositoryIndexingService.class);
+        AnalysisReconciliationScheduler dualScheduler = new AnalysisReconciliationScheduler(pullRequestAnalysisService, indexingService);
+
+        when(indexingService.reconcileDueRetries()).thenReturn(3);
+
+        int result = dualScheduler.scheduleDueRetryReconciliation();
+
+        assertThat(result).isEqualTo(3);
+        verify(indexingService).reconcileDueRetries();
     }
 }

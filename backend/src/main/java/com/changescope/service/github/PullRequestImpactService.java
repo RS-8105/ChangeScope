@@ -13,7 +13,13 @@ import com.changescope.dto.PullRequestMetadata;
 import com.changescope.dto.SourceFileContent;
 import com.changescope.exception.GitHubApiException;
 import com.changescope.exception.GitHubResourceNotFoundException;
+import com.changescope.dto.DependencyAnalysisResult;
+import com.changescope.dto.GraphOverlayResult;
+import com.changescope.service.GraphOverlayService;
 import com.changescope.service.ImpactReportService;
+import com.changescope.service.RepositoryIndexLoadResult;
+import com.changescope.service.RepositoryIndexLoader;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -32,15 +38,30 @@ public class PullRequestImpactService {
     private final GitHubGateway gitHubGateway;
     private final GitDiffTypeExtractor gitDiffTypeExtractor;
     private final ImpactReportService impactReportService;
+    private final RepositoryIndexLoader indexLoader;
+    private final GraphOverlayService graphOverlayService;
 
     public PullRequestImpactService(
         GitHubGateway gitHubGateway,
         GitDiffTypeExtractor gitDiffTypeExtractor,
         ImpactReportService impactReportService
     ) {
+        this(gitHubGateway, gitDiffTypeExtractor, impactReportService, null, null);
+    }
+
+    @Autowired
+    public PullRequestImpactService(
+        GitHubGateway gitHubGateway,
+        GitDiffTypeExtractor gitDiffTypeExtractor,
+        ImpactReportService impactReportService,
+        RepositoryIndexLoader indexLoader,
+        GraphOverlayService graphOverlayService
+    ) {
         this.gitHubGateway = gitHubGateway;
         this.gitDiffTypeExtractor = gitDiffTypeExtractor;
         this.impactReportService = impactReportService;
+        this.indexLoader = indexLoader;
+        this.graphOverlayService = graphOverlayService != null ? graphOverlayService : new GraphOverlayService();
     }
 
     public PullRequestImpactResult analyzePullRequest(String owner, String repo, int pullNumber) {
@@ -193,7 +214,7 @@ public class PullRequestImpactService {
         warnings.addAll(extractionResult.warnings());
         Collections.sort(warnings);
 
-        // 6. Targeted discovery of unchanged Java production and test files from base commit tree
+        // 6. Base repository index attempt & discovery of unchanged files
         List<SourceFileContent> discoveredTestContents = new ArrayList<>();
         List<SourceFileContent> discoveredProductionContents = new ArrayList<>();
         List<String> incompleteReasons = new ArrayList<>();
@@ -204,6 +225,41 @@ public class PullRequestImpactService {
         boolean discoveryFailed = false;
         String discoveryFailureReason = null;
 
+        boolean overlaySucceeded = false;
+        GraphOverlayResult overlayResult = null;
+        RepositoryIndexLoadResult.Usable usableIndex = null;
+
+        if (indexLoader != null && effectiveBaseSha != null && !effectiveBaseSha.isBlank()) {
+            try {
+                RepositoryIndexLoadResult indexLoadResult = indexLoader.loadIndex(owner, repo, effectiveBaseSha);
+                if (indexLoadResult instanceof RepositoryIndexLoadResult.Usable usable) {
+                    usableIndex = usable;
+                    List<JavaSourceFileInput> headInputs = availableHeadContents.stream()
+                        .map(SourceFileContent::toFileInput)
+                        .toList();
+                    overlayResult = graphOverlayService.overlay(
+                        usable.snapshot(),
+                        javaChanges,
+                        headInputs,
+                        extractionResult.changedTypes()
+                    );
+                    overlaySucceeded = true;
+                    discoveryAttempted = true;
+                } else if (indexLoadResult instanceof RepositoryIndexLoadResult.Unusable unusable) {
+                    incompleteReasons.add("Base repository index for commit " + effectiveBaseSha + " was in state "
+                        + unusable.status() + " and could not be used; fell back to bounded heuristic discovery");
+                } else if (indexLoadResult instanceof RepositoryIndexLoadResult.NotFound notFound) {
+                    incompleteReasons.add("No usable base repository index found for commit " + effectiveBaseSha
+                        + "; fell back to bounded heuristic discovery");
+                }
+            } catch (Exception ex) {
+                warnings.add("Failed to load or overlay base repository index for commit " + effectiveBaseSha + ": " + ex.getMessage());
+                incompleteReasons.add("Failed to load base repository index for commit " + effectiveBaseSha
+                    + "; fell back to bounded heuristic discovery");
+                overlaySucceeded = false;
+            }
+        }
+
         if (effectiveBaseSha != null && !effectiveBaseSha.isBlank()
                 && !extractionResult.changedTypes().isEmpty()) {
             try {
@@ -212,9 +268,11 @@ public class PullRequestImpactService {
                     discoveryAttempted = true;
                     isTruncated = treeResult.truncated();
                     if (isTruncated) {
-                        warnings.add("Base repository tree was truncated by GitHub API; some unchanged production files may not have been discovered");
+                        if (!overlaySucceeded) {
+                            warnings.add("Base repository tree was truncated by GitHub API; some unchanged production files may not have been discovered");
+                            incompleteReasons.add("Base repository tree was truncated by GitHub API; some unchanged production files may not have been discovered");
+                        }
                         warnings.add("Base repository tree was truncated by GitHub API; some unchanged test files may not have been discovered");
-                        incompleteReasons.add("Base repository tree was truncated by GitHub API; some unchanged production files may not have been discovered");
                     }
 
                     Set<String> prFilePaths = new HashSet<>();
@@ -229,58 +287,60 @@ public class PullRequestImpactService {
                         }
                     }
 
-                    // A. Targeted discovery of unchanged production files
-                    List<String> allCandidateProdPaths = discoverAllUnchangedProductionPaths(
-                        treeResult.filePaths(),
-                        extractionResult.changedTypes(),
-                        prFilePaths
-                    );
+                    // A. Targeted discovery of unchanged production files (bypassed if overlay succeeded)
+                    if (!overlaySucceeded) {
+                        List<String> allCandidateProdPaths = discoverAllUnchangedProductionPaths(
+                            treeResult.filePaths(),
+                            extractionResult.changedTypes(),
+                            prFilePaths
+                        );
 
-                    prodFilesDiscovered = allCandidateProdPaths.size();
-                    isCapped = prodFilesDiscovered > MAX_DISCOVERED_PRODUCTION_FILES;
-                    if (isCapped) {
-                        warnings.add("Targeted production file discovery reached limit of "
-                            + MAX_DISCOVERED_PRODUCTION_FILES + " files; some unchanged production dependents may be missing");
-                        incompleteReasons.add("Targeted production file discovery reached limit of "
-                            + MAX_DISCOVERED_PRODUCTION_FILES + " files; some unchanged production dependents may be missing");
-                    }
+                        prodFilesDiscovered = allCandidateProdPaths.size();
+                        isCapped = prodFilesDiscovered > MAX_DISCOVERED_PRODUCTION_FILES;
+                        if (isCapped) {
+                            warnings.add("Targeted production file discovery reached limit of "
+                                + MAX_DISCOVERED_PRODUCTION_FILES + " files; some unchanged production dependents may be missing");
+                            incompleteReasons.add("Targeted production file discovery reached limit of "
+                                + MAX_DISCOVERED_PRODUCTION_FILES + " files; some unchanged production dependents may be missing");
+                        }
 
-                    if (!isTruncated && !isCapped) {
-                        incompleteReasons.add("Targeted discovery is bounded to candidate naming and package heuristics; full repository indexing was not performed");
-                    }
+                        if (!isTruncated && !isCapped) {
+                            incompleteReasons.add("Targeted discovery is bounded to candidate naming and package heuristics; full repository indexing was not performed");
+                        }
 
-                    List<String> candidateProdPaths = allCandidateProdPaths.stream()
-                        .limit(MAX_DISCOVERED_PRODUCTION_FILES)
-                        .toList();
+                        List<String> candidateProdPaths = allCandidateProdPaths.stream()
+                            .limit(MAX_DISCOVERED_PRODUCTION_FILES)
+                            .toList();
 
-                    if (!candidateProdPaths.isEmpty()) {
-                        try {
-                            List<SourceFileContent> batch = gitHubGateway.getFilesContent(
-                                owner,
-                                repo,
-                                candidateProdPaths,
-                                effectiveBaseSha
-                            );
-                            if (batch != null) {
-                                for (SourceFileContent sfc : batch) {
-                                    if (sfc != null && sfc.content() != null && !sfc.content().isBlank()) {
-                                        discoveredProductionContents.add(sfc);
-                                    } else if (sfc != null && sfc.filePath() != null) {
-                                        warnings.add("Received empty source content for discovered production file '" + sfc.filePath() + "' at commit " + effectiveBaseSha);
+                        if (!candidateProdPaths.isEmpty()) {
+                            try {
+                                List<SourceFileContent> batch = gitHubGateway.getFilesContent(
+                                    owner,
+                                    repo,
+                                    candidateProdPaths,
+                                    effectiveBaseSha
+                                );
+                                if (batch != null) {
+                                    for (SourceFileContent sfc : batch) {
+                                        if (sfc != null && sfc.content() != null && !sfc.content().isBlank()) {
+                                            discoveredProductionContents.add(sfc);
+                                        } else if (sfc != null && sfc.filePath() != null) {
+                                            warnings.add("Received empty source content for discovered production file '" + sfc.filePath() + "' at commit " + effectiveBaseSha);
+                                        }
                                     }
                                 }
-                            }
-                        } catch (Exception ex) {
-                            for (String prodPath : candidateProdPaths) {
-                                try {
-                                    SourceFileContent sfc = gitHubGateway.getFileContent(owner, repo, prodPath, effectiveBaseSha);
-                                    if (sfc != null && sfc.content() != null && !sfc.content().isBlank()) {
-                                        discoveredProductionContents.add(sfc);
-                                    } else {
-                                        warnings.add("Received empty source content for discovered production file '" + prodPath + "' at commit " + effectiveBaseSha);
+                            } catch (Exception ex) {
+                                for (String prodPath : candidateProdPaths) {
+                                    try {
+                                        SourceFileContent sfc = gitHubGateway.getFileContent(owner, repo, prodPath, effectiveBaseSha);
+                                        if (sfc != null && sfc.content() != null && !sfc.content().isBlank()) {
+                                            discoveredProductionContents.add(sfc);
+                                        } else {
+                                            warnings.add("Received empty source content for discovered production file '" + prodPath + "' at commit " + effectiveBaseSha);
+                                        }
+                                    } catch (Exception individualEx) {
+                                        warnings.add("Failed to retrieve source content for discovered production file '" + prodPath + "' at commit " + effectiveBaseSha + ": " + individualEx.getMessage());
                                     }
-                                } catch (Exception individualEx) {
-                                    warnings.add("Failed to retrieve source content for discovered production file '" + prodPath + "' at commit " + effectiveBaseSha + ": " + individualEx.getMessage());
                                 }
                             }
                         }
@@ -329,10 +389,14 @@ public class PullRequestImpactService {
                     }
                 }
             } catch (Exception ex) {
-                discoveryFailed = true;
-                warnings.add("Failed to retrieve base repository tree for unchanged test discovery: " + ex.getMessage());
-                discoveryFailureReason = "Failed to retrieve base repository tree for unchanged discovery: " + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
-                incompleteReasons.add(discoveryFailureReason);
+                if (!overlaySucceeded) {
+                    discoveryFailed = true;
+                    warnings.add("Failed to retrieve base repository tree for unchanged test discovery: " + ex.getMessage());
+                    discoveryFailureReason = "Failed to retrieve base repository tree for unchanged discovery: " + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
+                    incompleteReasons.add(discoveryFailureReason);
+                } else {
+                    warnings.add("Failed to retrieve base repository tree for test discovery at commit " + effectiveBaseSha + ": " + ex.getMessage());
+                }
             }
         }
 
@@ -383,7 +447,26 @@ public class PullRequestImpactService {
 
         // Determine structured analysis coverage
         AnalysisCoverage coverage;
-        if (discoveryFailed) {
+        if (overlaySucceeded && usableIndex != null) {
+            if (usableIndex.isComplete()) {
+                coverage = AnalysisCoverage.fullRepositoryIndex(
+                    effectiveBaseSha,
+                    usableIndex.totalFilesDiscovered(),
+                    usableIndex.totalFilesIndexed()
+                );
+            } else {
+                List<String> partialReasons = new ArrayList<>();
+                partialReasons.add("Repository base index for commit " + effectiveBaseSha
+                    + " is partial or was capped at discovery limits; full repository index is incomplete");
+                coverage = AnalysisCoverage.boundedPartial(
+                    effectiveBaseSha,
+                    usableIndex.totalFilesDiscovered(),
+                    usableIndex.totalFilesIndexed(),
+                    true,
+                    partialReasons
+                );
+            }
+        } else if (discoveryFailed) {
             coverage = AnalysisCoverage.prFilesOnlyIncomplete(effectiveBaseSha, discoveryFailureReason);
         } else if (!discoveryAttempted) {
             coverage = AnalysisCoverage.prFilesOnly(effectiveBaseSha);
@@ -400,11 +483,25 @@ public class PullRequestImpactService {
         Collections.sort(warnings);
 
         // 8. Run full impact analysis
-        ImpactReport impactReport = impactReportService.generateReport(
-            analysisFiles,
-            extractionResult.changedTypes(),
-            coverage
-        );
+        DependencyAnalysisResult precomputedDeps = (overlaySucceeded && overlayResult != null)
+            ? overlayResult.toDependencyAnalysisResult()
+            : null;
+
+        ImpactReport impactReport;
+        if (precomputedDeps != null) {
+            impactReport = impactReportService.generateReport(
+                analysisFiles,
+                extractionResult.changedTypes(),
+                coverage,
+                precomputedDeps
+            );
+        } else {
+            impactReport = impactReportService.generateReport(
+                analysisFiles,
+                extractionResult.changedTypes(),
+                coverage
+            );
+        }
         if (impactReport == null) {
             impactReport = impactReportService.generateReport(
                 analysisFiles,

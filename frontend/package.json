@@ -10,10 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@xyflow/react": "^12.12.0",
+    "axios": "^1.21.0",
     "clsx": "^2.1.1",
     "lucide-react": "^1.58.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.5",
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {

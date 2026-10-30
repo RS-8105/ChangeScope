@@ -311,9 +311,30 @@ class GitHubWebhookDeliveryServiceTest {
         assertThat(GitHubWebhookDeliveryService.isRetryable(new com.changescope.exception.GitHubApiException(502, "BAD_GATEWAY", "502"))).isTrue();
         assertThat(GitHubWebhookDeliveryService.isRetryable(new com.changescope.exception.GitHubApiException(503, "SERVICE_UNAVAILABLE", "503"))).isTrue();
         assertThat(GitHubWebhookDeliveryService.isRetryable(new org.springframework.web.client.ResourceAccessException("timeout"))).isTrue();
+        assertThat(GitHubWebhookDeliveryService.isRetryable(new java.util.concurrent.RejectedExecutionException("Task rejected: queue is full"))).isTrue();
 
         // Nested causes
         assertThat(GitHubWebhookDeliveryService.isRetryable(new RuntimeException("wrap", new java.io.IOException("reset")))).isTrue();
+        assertThat(GitHubWebhookDeliveryService.isRetryable(new RuntimeException("wrap", new java.util.concurrent.RejectedExecutionException("nested rejection")))).isTrue();
         assertThat(GitHubWebhookDeliveryService.isRetryable(new RuntimeException("wrap", new com.changescope.exception.ResourceNotFoundException("repo")))).isFalse();
+    }
+
+    @Test
+    void registerDelivery_rejectedExecutionFailure_isRecordedAsRetryable() {
+        String deliveryId = "del-rejected-test";
+        deliveryService.registerDelivery(deliveryId, "push");
+        deliveryService.markFailed(deliveryId, new java.util.concurrent.RejectedExecutionException("Indexing executor queue full"));
+
+        WebhookDeliveryEntity failedEntity = deliveryRepository.findByDeliveryId(deliveryId).orElseThrow();
+        assertThat(failedEntity.getStatus()).isEqualTo(WebhookDeliveryStatus.FAILED);
+        assertThat(failedEntity.isRetryable()).isTrue();
+        assertThat(failedEntity.getFailureSummary()).contains("Indexing executor queue full");
+
+        // Subsequent retry of the rejected delivery must be allowed
+        boolean retryRegistered = deliveryService.registerDelivery(deliveryId, "push");
+        assertThat(retryRegistered).isTrue();
+
+        WebhookDeliveryEntity reclaimed = deliveryRepository.findByDeliveryId(deliveryId).orElseThrow();
+        assertThat(reclaimed.getStatus()).isEqualTo(WebhookDeliveryStatus.RECEIVED);
     }
 }

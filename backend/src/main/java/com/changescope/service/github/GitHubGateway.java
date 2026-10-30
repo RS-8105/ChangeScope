@@ -64,4 +64,14 @@ public interface GitHubGateway {
      * @return Git tree result containing file paths and truncation status
      */
     GitTreeResult getGitTree(String owner, String repo, String commitSha);
+
+    /**
+     * Retrieves the latest commit SHA at the HEAD of the specified branch.
+     *
+     * @param owner  the repository owner
+     * @param repo   the repository name
+     * @param branch the branch name (e.g., "main")
+     * @return the 40-character commit SHA at branch HEAD
+     */
+    String getBranchHeadCommit(String owner, String repo, String branch);
 }
